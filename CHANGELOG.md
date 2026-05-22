@@ -6,6 +6,33 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-05-22
+
+主题：把在线更新对话框打磨成可日常使用的工具——加入 GitHub Token 配置消除限流问题，加入版本验证防止重复更新，加入 staged 复用让两步操作变成无缝衔接，并清理视觉噪音。
+
+### ✨ 新功能
+
+- **GitHub Token 配置**：在线更新对话框新增 GitHub Personal Access Token 输入区，保存后所有 GitHub API 调用都会带上 `Authorization: Bearer <token>`，把限流从匿名 60/小时 提升到认证 5000/小时。匿名访问触发 `403 API rate limit exceeded` 时不再无解。
+  - 配置文件新增 `githubToken` 字段（顶层）
+  - Admin API：`GET /api/admin/config/update` 返回 `githubTokenSet: bool`（不回明文，避免泄露），`PUT /api/admin/config/update` 接受 `githubToken: string`（空字符串表示清除）
+- **Token 验证 + 限流可视化**：新增 `POST /api/admin/system/update/rate-limit` 端点，调用 GitHub `/rate_limit` 实时返回当前限额状态。该 GitHub 端点本身不消耗任何配额，可放心反复调用。
+  - 前端在 token 输入框旁加「验证」按钮：保存前用输入的 token 试一次，避免保存了无效 token
+  - 对话框打开时自动用已保存 token 查一次限额，展示「已认证 / 匿名」徽章、`@username`、`已用 N/上限`、进度条、重置时间
+  - 剩余次数低于上限 5% 时进度条变 amber 提醒
+- **「上次更新于」时间戳**：apply 成功后记录 RFC3339 时间到 `updateLastAppliedAt` 字段，对话框展示「上次更新于：YYYY-MM-DD HH:MM:SS」（本地时区）。回退时清空。
+
+### 🛠 体验优化
+
+- **拉取镜像 → 更新并重启 复用 staged**：「拉取镜像」按钮不再是死功能。下载产物保存到 `<exe>.staged-<version>`，「更新并重启」检测到同版本 staged 时直接 install + exit，跳过重复下载。两步操作之间几乎无感知延迟。
+- **当前已是最新版本时禁用「更新并重启」**：避免对相同版本做无意义的下载-替换-重启。后端在 `apply_image_update` 入口加版本检查，前端按钮根据 `hasUpdate` 同步禁用，鼠标悬停显示原因。
+- **GitHub Token Scopes 不再展示**：原本会把 token 的 OAuth scopes 列出来（如 `admin:org, repo, ...`），是不必要的权限信息泄露。后端不再读取 `X-OAuth-Scopes` header，前端不再显示 Scopes 行。
+
+### 🎨 界面调整
+
+- **更新对话框扁平化**：移除外层卡片包装与 4 层嵌套边框，三个分区改为 `<section>` + `border-t pt-4` 顶分隔线。
+- **取消「有更新」时整块变黄**：原本有更新时整个面板背景变 amber，已经有绿色「可更新」徽章传达同样信息。现在面板始终是中性背景，只保留徽章。
+- **限流摘要卡内嵌**：限流状态展示不再是独立带边框的卡片，而是直接平铺在 GitHub Token 区下方，仅用图标颜色（绿/红）和进度条颜色（绿/黄）区分状态。
+
 ## [0.3.1] - 2026-05-22
 
 ### ⚠️ 不兼容变更（Breaking changes）
