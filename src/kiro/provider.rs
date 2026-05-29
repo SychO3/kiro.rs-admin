@@ -453,6 +453,52 @@ impl KiroProvider {
                 continue;
             }
 
+            // 429 + suspicious activity = 账号级临时风控
+            // 仅当前凭据被针对，故障转移到其它凭据可立即恢复（受配置开关控制）。
+            if status.as_u16() == 429
+                && self.token_manager.get_account_throttle_failover()
+                && endpoint.is_account_throttled(&body)
+            {
+                let cooldown_secs = self
+                    .token_manager
+                    .get_account_throttle_cooldown_secs()
+                    .max(1);
+                let cooldown = std::time::Duration::from_secs(cooldown_secs);
+                tracing::warn!(
+                    "API 请求失败（账号级风控，凭据 #{} 冷却 {}s 并切换，尝试 {}/{}）: {}",
+                    ctx.id,
+                    cooldown_secs,
+                    attempt + 1,
+                    max_retries,
+                    body
+                );
+
+                let remaining = self.token_manager.report_account_throttled(ctx.id, cooldown);
+                last_error = Some(anyhow::anyhow!(
+                    "{} API 请求失败（账号级风控，凭据 #{} 已冷却 {} 分钟）: {} {}",
+                    api_type,
+                    ctx.id,
+                    cooldown_secs / 60,
+                    status,
+                    body
+                ));
+
+                if remaining == 0 {
+                    anyhow::bail!(
+                        "{} API 请求失败：所有凭据都处于账号风控冷却或已禁用状态。\
+                         上游对凭据 #{} 的账号触发了 \"suspicious activity\" 临时限速，\
+                         建议：(1) 增加更多不同 AWS 账号的凭据；\
+                         (2) 在管理面板降低冷却时长或手动解除冷却以重试；\
+                         (3) 提交 AWS Support 申诉解封该账号。原始响应: {} {}",
+                        api_type,
+                        ctx.id,
+                        status,
+                        body
+                    );
+                }
+                continue;
+            }
+
             // 429/408/5xx - 瞬态上游错误：重试但不禁用或切换凭据
             // （避免 429 high traffic / 502 high load 等瞬态错误把所有凭据锁死）
             if matches!(status.as_u16(), 408 | 429) || status.is_server_error() {

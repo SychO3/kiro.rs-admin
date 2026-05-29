@@ -19,13 +19,14 @@ use crate::model::config::Config;
 use super::error::AdminServiceError;
 use super::proxy_pool::{GetUrlResult, ProxyPoolManager};
 use super::types::{
-    AddCredentialRequest, AddCredentialResponse, AssignProxyRequest, BalanceResponse,
-    BatchAddProxyRequest, CheckRateLimitRequest, CredentialStatusItem, CredentialsStatusResponse,
-    EnableOverageAllResult, GitHubRateLimitInfo, ImageUpdateResponse, KamExportAccount,
-    KamExportResponse, LoadBalancingModeResponse, PollIdcLoginResponse, ProxyPoolEntry,
-    ProxyPoolResponse, QuotaExceededResult, SetLoadBalancingModeRequest, SetUpdateConfigRequest,
-    StartIdcLoginRequest, StartIdcLoginResponse, StartSocialLoginRequest, StartSocialLoginResponse,
-    UpdateCheckInfo, UpdateConfigResponse, UpdateCredentialRequest, UpdateRefreshTokenRequest,
+    AccountThrottleConfigResponse, AddCredentialRequest, AddCredentialResponse, AssignProxyRequest,
+    BalanceResponse, BatchAddProxyRequest, CheckRateLimitRequest, CredentialStatusItem,
+    CredentialsStatusResponse, EnableOverageAllResult, GitHubRateLimitInfo, ImageUpdateResponse,
+    KamExportAccount, KamExportResponse, LoadBalancingModeResponse, PollIdcLoginResponse,
+    ProxyPoolEntry, ProxyPoolResponse, QuotaExceededResult, SetAccountThrottleConfigRequest,
+    SetLoadBalancingModeRequest, SetUpdateConfigRequest, StartIdcLoginRequest,
+    StartIdcLoginResponse, StartSocialLoginRequest, StartSocialLoginResponse, UpdateCheckInfo,
+    UpdateConfigResponse, UpdateCredentialRequest, UpdateRefreshTokenRequest,
 };
 
 /// 余额缓存过期时间（秒），5 分钟
@@ -532,6 +533,12 @@ impl AdminService {
     pub fn reset_and_enable(&self, id: u64) -> Result<(), AdminServiceError> {
         self.token_manager
             .reset_and_enable(id)
+            .map_err(|e| self.classify_error(e, id))
+    }
+
+    pub fn clear_throttle(&self, id: u64) -> Result<(), AdminServiceError> {
+        self.token_manager
+            .clear_throttle(id)
             .map_err(|e| self.classify_error(e, id))
     }
 
@@ -1468,6 +1475,32 @@ impl AdminService {
             .map_err(|e| AdminServiceError::InternalError(e.to_string()))?;
 
         Ok(LoadBalancingModeResponse { mode: req.mode })
+    }
+
+    /// 获取账号级风控故障转移配置
+    pub fn get_account_throttle_config(&self) -> AccountThrottleConfigResponse {
+        AccountThrottleConfigResponse {
+            failover: self.token_manager.get_account_throttle_failover(),
+            cooldown_secs: self.token_manager.get_account_throttle_cooldown_secs(),
+        }
+    }
+
+    /// 更新账号级风控故障转移配置
+    pub fn set_account_throttle_config(
+        &self,
+        req: SetAccountThrottleConfigRequest,
+    ) -> Result<AccountThrottleConfigResponse, AdminServiceError> {
+        if req.failover.is_none() && req.cooldown_secs.is_none() {
+            return Err(AdminServiceError::InvalidCredential(
+                "至少提供 failover 或 cooldownSecs 一个字段".to_string(),
+            ));
+        }
+
+        self.token_manager
+            .set_account_throttle_config(req.failover, req.cooldown_secs)
+            .map_err(|e| AdminServiceError::InvalidCredential(e.to_string()))?;
+
+        Ok(self.get_account_throttle_config())
     }
 
     /// 更新指定凭据的 refreshToken（仅限已禁用凭据）

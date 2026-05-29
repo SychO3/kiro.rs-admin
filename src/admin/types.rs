@@ -289,6 +289,28 @@ pub struct SetLoadBalancingModeRequest {
     pub mode: String,
 }
 
+/// 账号级风控故障转移配置响应
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountThrottleConfigResponse {
+    /// 是否启用账号级 429 故障转移
+    pub failover: bool,
+    /// 冷却时长（秒）
+    pub cooldown_secs: u64,
+}
+
+/// 更新账号级风控故障转移配置
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetAccountThrottleConfigRequest {
+    /// 是否启用故障转移；缺省表示不修改
+    #[serde(default)]
+    pub failover: Option<bool>,
+    /// 冷却时长（秒）；缺省表示不修改，1..=86400
+    #[serde(default)]
+    pub cooldown_secs: Option<u64>,
+}
+
 // ============ 代理池 ============
 
 /// 代理池条目
