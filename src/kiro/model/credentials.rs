@@ -82,6 +82,12 @@ pub struct KiroCredentials {
     #[serde(skip_serializing_if = "is_zero")]
     pub priority: u32,
 
+    /// 每分钟请求数上限（RPM 滑动窗口）。默认 10；0 表示不限速。
+    /// 始终序列化（不 skip）：默认值 10 ≠ 0，若 skip 掉则用户显式设的 0（不限速）
+    /// 会因缺字段被反序列化回默认 10，丢失「不限速」语义。
+    #[serde(default = "default_rpm_limit")]
+    pub rpm_limit: u32,
+
     /// 凭据级 Region 配置（用于 OIDC token 刷新）
     /// 未配置时回退到 config.json 的全局 region
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -162,6 +168,11 @@ fn is_zero(value: &u32) -> bool {
     *value == 0
 }
 
+/// rpm_limit 缺省值：默认每分钟 10 次。
+fn default_rpm_limit() -> u32 {
+    10
+}
+
 /// 仅显示长度，不暴露明文。例如 `Some(42 chars)` 或 `None`。
 fn fmt_redacted(value: &Option<String>) -> String {
     match value {
@@ -189,6 +200,7 @@ impl std::fmt::Debug for KiroCredentials {
             .field("issuer_url", &self.issuer_url)
             .field("scopes", &self.scopes)
             .field("priority", &self.priority)
+            .field("rpm_limit", &self.rpm_limit)
             .field("region", &self.region)
             .field("auth_region", &self.auth_region)
             .field("api_region", &self.api_region)
@@ -484,6 +496,30 @@ mod tests {
     }
 
     #[test]
+    fn test_rpm_limit_serde_roundtrip() {
+        // 1. 缺 rpmLimit 键的旧数据 → 回退到默认 10
+        let legacy = r#"{ "accessToken": "t", "authMethod": "social" }"#;
+        let c = KiroCredentials::from_json(legacy).unwrap();
+        assert_eq!(c.rpm_limit, 10, "缺字段应回退默认 10");
+
+        // 2. 显式 0（不限速）必须原样保留，不被吞回 10
+        let zero = r#"{ "accessToken": "t", "rpmLimit": 0 }"#;
+        let c0 = KiroCredentials::from_json(zero).unwrap();
+        assert_eq!(c0.rpm_limit, 0, "显式 0 不应被默认覆盖");
+        let json0 = c0.to_pretty_json().unwrap();
+        assert!(json0.contains("rpmLimit"), "0 也必须序列化");
+        assert_eq!(
+            KiroCredentials::from_json(&json0).unwrap().rpm_limit,
+            0,
+            "0 序列化再读回仍为 0"
+        );
+
+        // 3. 自定义值往返
+        let five = r#"{ "accessToken": "t", "rpmLimit": 5 }"#;
+        assert_eq!(KiroCredentials::from_json(five).unwrap().rpm_limit, 5);
+    }
+
+    #[test]
     fn test_from_json_with_unknown_keys() {
         let json = r#"{
             "accessToken": "test_token",
@@ -511,6 +547,7 @@ mod tests {
             issuer_url: None,
             scopes: None,
             priority: 0,
+            rpm_limit: 10,
             region: None,
             auth_region: None,
             api_region: None,
@@ -533,6 +570,8 @@ mod tests {
         assert!(!json.contains("refreshToken"));
         // priority 为 0 时不序列化
         assert!(!json.contains("priority"));
+        // rpm_limit 始终序列化（即便等于默认 10），保证 0=不限速 不被吞
+        assert!(json.contains("rpmLimit"));
     }
 
     #[test]
@@ -748,6 +787,7 @@ mod tests {
             issuer_url: None,
             scopes: None,
             priority: 0,
+            rpm_limit: 10,
             region: Some("eu-west-1".to_string()),
             auth_region: None,
             api_region: None,
@@ -786,6 +826,7 @@ mod tests {
             issuer_url: None,
             scopes: None,
             priority: 0,
+            rpm_limit: 10,
             region: None,
             auth_region: None,
             api_region: None,
@@ -907,6 +948,7 @@ mod tests {
             issuer_url: None,
             scopes: None,
             priority: 3,
+            rpm_limit: 10,
             region: Some("us-west-2".to_string()),
             auth_region: None,
             api_region: None,

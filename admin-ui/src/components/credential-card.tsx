@@ -705,6 +705,20 @@ export function CredentialCard({
             <RotateCcw className="h-3 w-3 opacity-70" />
           </button>
         </div>
+
+        <div className="w-16 text-center">
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            RPM
+          </div>
+          <div
+            className="mt-0.5 text-sm font-medium tabular-nums text-muted-foreground"
+            title="当前一分钟已用 / 上限（0 = 不限速）"
+          >
+            {credential.rpmLimit === 0
+              ? "不限"
+              : `${credential.rpmCurrent ?? 0}/${credential.rpmLimit ?? 10}`}
+          </div>
+        </div>
       </div>
 
       {/* 余额（大屏） */}
@@ -958,6 +972,14 @@ export function CredentialCard({
                   {credential.successCount}
                   <RotateCcw className="h-3 w-3 opacity-70" />
                 </button>
+              </dd>
+            </div>
+            <div className="flex min-w-0 items-center justify-between gap-2">
+              <dt className="shrink-0 text-muted-foreground">RPM（本分钟/上限）</dt>
+              <dd className="min-w-0 truncate text-right font-medium tabular-nums">
+                {credential.rpmLimit === 0
+                  ? "不限速"
+                  : `${credential.rpmCurrent ?? 0} / ${credential.rpmLimit ?? 10}`}
               </dd>
             </div>
             <div className="flex min-w-0 items-center justify-between gap-2 border-t border-border/50 pt-2 min-[420px]:col-span-2">

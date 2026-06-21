@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex as TokioMutex;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -876,6 +876,9 @@ struct CredentialEntry {
     /// 凭据交给调用方时 +1，请求结束时 -1（由 InFlightGuard 负责）。
     /// 不持久化，进程重启归零（与 throttled_until 同类，纯运行时状态）。
     in_flight: u32,
+    /// 最近 60 秒内「对该账号上游发起请求」的时间戳队列（RPM 滑动窗口计数）。
+    /// record_request 时 push 队尾并剔除过期项；不持久化，进程重启清空。
+    recent_requests: VecDeque<Instant>,
 }
 
 /// 禁用原因
@@ -916,6 +919,10 @@ pub struct CredentialEntrySnapshot {
     pub id: u64,
     /// 优先级
     pub priority: u32,
+    /// 每分钟请求数上限（0 = 不限速）
+    pub rpm_limit: u32,
+    /// 当前滑动窗口内已用请求条数（前端展示 "rpm_current / rpm_limit"）
+    pub rpm_current: u32,
     /// 是否被禁用
     pub disabled: bool,
     /// 连续失败次数
@@ -1082,6 +1089,33 @@ fn credential_matches_request(
     group_matches(&credentials.groups, group)
 }
 
+/// RPM 滑动窗口长度：60 秒。
+const RPM_WINDOW: StdDuration = StdDuration::from_secs(60);
+
+/// 统计 entry 在 [now-60s, now] 窗口内的请求条数（只读，不修改队列）。
+///
+/// 即使一段时间未 record_request、队列里残留过期项，这里也只统计窗口内的，
+/// 不会误判超限。
+fn rpm_window_count(entry: &CredentialEntry, now: Instant) -> u32 {
+    // 进程启动不足 60s 时 now-60s 下溢，checked_sub 返回 None，此时全部计入（保守正确）
+    let cutoff = now.checked_sub(RPM_WINDOW);
+    entry
+        .recent_requests
+        .iter()
+        .filter(|&&t| cutoff.map(|c| t > c).unwrap_or(true))
+        .count() as u32
+}
+
+/// 该账号是否已达 RPM 上限。`rpm_limit == 0` 视为不限速，永远返回 false；
+/// 窗口内条数 >= rpm_limit 即达限（恰好等于上限也算超）。
+fn is_rpm_exceeded(entry: &CredentialEntry, now: Instant) -> bool {
+    let limit = entry.credentials.rpm_limit;
+    if limit == 0 {
+        return false; // 不限速
+    }
+    rpm_window_count(entry, now) >= limit
+}
+
 impl MultiTokenManager {
     /// 创建多凭据 Token 管理器
     ///
@@ -1140,6 +1174,7 @@ impl MultiTokenManager {
                     last_used_at: None,
                     throttled_until: None,
                     in_flight: 0,
+                    recent_requests: VecDeque::new(),
                 }
             })
             .collect();
@@ -1303,6 +1338,10 @@ impl MultiTokenManager {
                 if !credential_matches_request(&e.credentials, model, group) {
                     return false;
                 }
+                // RPM 滑动窗口：本账号最近 60s 请求数已达上限，跳过（与 throttled 同范式）
+                if is_rpm_exceeded(e, now) {
+                    return false;
+                }
                 true
             })
             .collect();
@@ -1385,6 +1424,7 @@ impl MultiTokenManager {
                             e.id == current_id
                                 && !e.disabled
                                 && !e.throttled_until.map(|t| t > now).unwrap_or(false)
+                                && !is_rpm_exceeded(e, now)
                                 && credential_matches_request(&e.credentials, model, group)
                         })
                         .map(|e| (e.id, e.credentials.clone()))
@@ -1862,6 +1902,29 @@ impl MultiTokenManager {
         }
     }
 
+    /// 记录一次「对该账号上游发起请求」，用于 RPM 滑动窗口计数。
+    ///
+    /// push now 到队尾，并从队首剔除所有超过 60s 的过期时间戳。
+    /// 由 provider 在「会话级首次用到该凭据」时调用一次（同凭据重试不重复记，
+    /// 故障转移到新凭据时各记一次）。必须在未持有 entries 锁时调用。
+    pub(crate) fn record_request(&self, id: u64) {
+        let now = Instant::now();
+        let cutoff = now.checked_sub(RPM_WINDOW);
+        let mut entries = self.entries.lock();
+        if let Some(e) = entries.iter_mut().find(|e| e.id == id) {
+            if let Some(c) = cutoff {
+                while let Some(&front) = e.recent_requests.front() {
+                    if front <= c {
+                        e.recent_requests.pop_front();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            e.recent_requests.push_back(now);
+        }
+    }
+
     /// 为指定凭据构造 in-flight RAII 守卫（provider 用其持有的 Arc 调用）。
     ///
     /// 与 `inc_in_flight` 配对：`acquire_context` 内已 +1，本守卫负责在请求结束时 -1。
@@ -2188,6 +2251,8 @@ impl MultiTokenManager {
                 .map(|e| CredentialEntrySnapshot {
                     id: e.id,
                     priority: e.credentials.priority,
+                    rpm_limit: e.credentials.rpm_limit,
+                    rpm_current: rpm_window_count(e, now),
                     disabled: e.disabled,
                     failure_count: e.failure_count,
                     total_failure_count: e.total_failure_count,
@@ -2920,6 +2985,7 @@ impl MultiTokenManager {
         // 5. 设置 ID 并保留用户输入的元数据
         validated_cred.id = Some(new_id);
         validated_cred.priority = new_cred.priority;
+        validated_cred.rpm_limit = new_cred.rpm_limit;
         validated_cred.auth_method = new_cred.auth_method.map(|m| {
             if m.eq_ignore_ascii_case("builder-id") || m.eq_ignore_ascii_case("iam") {
                 "idc".to_string()
@@ -3007,6 +3073,7 @@ impl MultiTokenManager {
                 last_used_at: None,
                 throttled_until: None,
                 in_flight: 0,
+                recent_requests: VecDeque::new(),
             });
         }
 
@@ -3031,6 +3098,7 @@ impl MultiTokenManager {
         proxy_password: Option<Option<String>>,
         groups: Option<Vec<String>>,
         source_channel: Option<Option<String>>,
+        rpm_limit: Option<u32>,
     ) -> anyhow::Result<()> {
         {
             let mut entries = self.entries.lock();
@@ -3058,6 +3126,9 @@ impl MultiTokenManager {
             if let Some(v) = source_channel {
                 entry.credentials.source_channel =
                     v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+            }
+            if let Some(v) = rpm_limit {
+                entry.credentials.rpm_limit = v; // 0 = 不限速
             }
         }
         self.persist_credentials()?;
@@ -3882,6 +3953,146 @@ mod tests {
         }
         let pick = manager.select_next_credential(None, None);
         assert_eq!(pick.map(|(id, _)| id), Some(1), "平局应按优先级稳定选 A");
+    }
+
+    #[test]
+    fn test_rpm_window_count_and_expiry() {
+        let manager = MultiTokenManager::new(
+            Config::default(),
+            vec![grouped_cred("a", &[])],
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        let now = Instant::now();
+        {
+            let mut entries = manager.entries.lock();
+            let e = entries.iter_mut().find(|e| e.id == 1).unwrap();
+            // 3 个过期（70s 前）+ 2 个窗口内
+            for _ in 0..3 {
+                e.recent_requests
+                    .push_back(now - StdDuration::from_secs(70));
+            }
+            for _ in 0..2 {
+                e.recent_requests.push_back(now);
+            }
+        }
+        {
+            let entries = manager.entries.lock();
+            let e = entries.iter().find(|e| e.id == 1).unwrap();
+            // 只数窗口内的 2 个（过期项不计入）
+            assert_eq!(rpm_window_count(e, now), 2);
+        }
+        // record_request 会剔除过期项
+        manager.record_request(1);
+        {
+            let entries = manager.entries.lock();
+            let e = entries.iter().find(|e| e.id == 1).unwrap();
+            // 过期 3 个被 pop，剩 2 旧窗口内 + 1 新 = 3
+            assert_eq!(e.recent_requests.len(), 3);
+        }
+    }
+
+    #[test]
+    fn test_is_rpm_exceeded_boundary_and_unlimited() {
+        let manager = MultiTokenManager::new(
+            Config::default(),
+            vec![grouped_cred("a", &[])],
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        let now = Instant::now();
+
+        // limit=10：窗口 9 条不超，10 条达限（恰好等于上限算超）
+        {
+            let mut entries = manager.entries.lock();
+            let e = entries.iter_mut().find(|e| e.id == 1).unwrap();
+            e.credentials.rpm_limit = 10;
+            for _ in 0..9 {
+                e.recent_requests.push_back(now);
+            }
+        }
+        {
+            let entries = manager.entries.lock();
+            let e = entries.iter().find(|e| e.id == 1).unwrap();
+            assert!(!is_rpm_exceeded(e, now), "9 条未达上限");
+        }
+        {
+            let mut entries = manager.entries.lock();
+            entries
+                .iter_mut()
+                .find(|e| e.id == 1)
+                .unwrap()
+                .recent_requests
+                .push_back(now);
+        }
+        {
+            let entries = manager.entries.lock();
+            let e = entries.iter().find(|e| e.id == 1).unwrap();
+            assert!(is_rpm_exceeded(e, now), "10 条达上限");
+        }
+
+        // limit=0：不限速，塞 1000 条仍不超
+        {
+            let mut entries = manager.entries.lock();
+            let e = entries.iter_mut().find(|e| e.id == 1).unwrap();
+            e.credentials.rpm_limit = 0;
+            for _ in 0..1000 {
+                e.recent_requests.push_back(now);
+            }
+        }
+        {
+            let entries = manager.entries.lock();
+            let e = entries.iter().find(|e| e.id == 1).unwrap();
+            assert!(!is_rpm_exceeded(e, now), "rpm_limit=0 不限速");
+        }
+    }
+
+    #[test]
+    fn test_select_skips_rpm_exceeded_credential() {
+        let manager = MultiTokenManager::new(
+            Config::default(),
+            vec![grouped_cred("a", &[]), grouped_cred("b", &[])],
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        let now = Instant::now();
+
+        // A(id1) 限速 2 且窗口已满 2 → 应跳过，选 B(id2)
+        {
+            let mut entries = manager.entries.lock();
+            let a = entries.iter_mut().find(|e| e.id == 1).unwrap();
+            a.credentials.rpm_limit = 2;
+            a.recent_requests.push_back(now);
+            a.recent_requests.push_back(now);
+        }
+        let pick = manager.select_next_credential(None, None);
+        assert_eq!(pick.map(|(id, _)| id), Some(2), "A 达限应转移到 B");
+
+        // B 也限速 2 且打满 → 两张都达限，返回 None
+        {
+            let mut entries = manager.entries.lock();
+            let b = entries.iter_mut().find(|e| e.id == 2).unwrap();
+            b.credentials.rpm_limit = 2;
+            b.recent_requests.push_back(now);
+            b.recent_requests.push_back(now);
+        }
+        assert!(
+            manager.select_next_credential(None, None).is_none(),
+            "全部达限应返回 None"
+        );
+    }
+
+    #[test]
+    fn test_default_credentials_rpm_limit_is_zero() {
+        // 决策 5：保留 #[derive(Default)]，default() 的 rpm_limit=0（不限速，仅内部/测试用）。
+        // 用户可见的默认 10 由 serde default 与表单 default 保证。
+        assert_eq!(KiroCredentials::default().rpm_limit, 0);
     }
 
     #[tokio::test]

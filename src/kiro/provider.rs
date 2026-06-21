@@ -261,6 +261,8 @@ impl KiroProvider {
         let max_retries = (total_credentials * MAX_RETRIES_PER_CREDENTIAL).min(MAX_TOTAL_RETRIES);
         let mut last_error: Option<anyhow::Error> = None;
         let mut force_refreshed: HashSet<u64> = HashSet::new();
+        // 会话级 RPM 记账去重（同 call_api_with_retry）
+        let mut rpm_recorded: HashSet<u64> = HashSet::new();
 
         for attempt in 0..max_retries {
             // MCP 调用（WebSearch 等工具）不涉及模型选择，也不参与分组隔离
@@ -273,6 +275,11 @@ impl KiroProvider {
             };
             // least_conn 在途计数守卫：随本次迭代作用域结束自动 -1（具名绑定，勿用裸 `_`）。
             let _in_flight = self.token_manager.in_flight_guard(ctx.id);
+
+            // RPM 记账：本会话首次用到该凭据才记 1 次。
+            if rpm_recorded.insert(ctx.id) {
+                self.token_manager.record_request(ctx.id);
+            }
 
             let config = self.token_manager.config();
             let machine_id = machine_id::generate_from_credentials(&ctx.credentials, config);
@@ -426,6 +433,9 @@ impl KiroProvider {
         let max_retries = (total_credentials * MAX_RETRIES_PER_CREDENTIAL).min(MAX_TOTAL_RETRIES);
         let mut last_error: Option<anyhow::Error> = None;
         let mut force_refreshed: HashSet<u64> = HashSet::new();
+        // 会话级 RPM 记账去重：同一凭据在本会话（含 429 重试）只记 1 次 tick；
+        // 故障转移到不同凭据时各记 1 次。
+        let mut rpm_recorded: HashSet<u64> = HashSet::new();
         let api_type = if is_stream { "流式" } else { "非流式" };
 
         // 尝试从请求体中提取模型信息
@@ -448,6 +458,11 @@ impl KiroProvider {
             // least_conn 在途计数守卫：随本次迭代作用域结束自动 -1，覆盖所有退出路径
             // （return/continue/bail!/? 早退）。必须具名绑定，裸 `_` 会立即 Drop。
             let _in_flight = self.token_manager.in_flight_guard(ctx.id);
+
+            // RPM 记账：本会话首次用到该凭据才记 1 次（同凭据重试不再记）。
+            if rpm_recorded.insert(ctx.id) {
+                self.token_manager.record_request(ctx.id);
+            }
 
             // 确保 Enterprise / IdC 账号的真实 profileArn 已解析（流式端点强制要求）
             self.ensure_profile_arn(&mut ctx).await;

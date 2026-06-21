@@ -46,6 +46,7 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
   const [endpoint, setEndpoint] = useState('')
   const [groups, setGroups] = useState<string[]>([])
   const [sourceChannel, setSourceChannel] = useState('')
+  const [rpmLimit, setRpmLimit] = useState('10')
 
   const groupOptions = useGroupOptions()
 
@@ -69,6 +70,7 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
     setEndpoint('')
     setGroups([])
     setSourceChannel('')
+    setRpmLimit('10')
   }
 
   const isApiKey = authMethod === 'api_key'
@@ -120,6 +122,7 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
         endpoint: endpoint.trim() || undefined,
         groups: groups,
         sourceChannel: sourceChannel.trim() || undefined,
+        rpmLimit: rpmLimit.trim() === '' ? undefined : Number(rpmLimit),
       },
       {
         onSuccess: (data) => {
@@ -224,6 +227,25 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
               </div>
               <p className="text-xs text-muted-foreground">
                 均可留空使用全局配置。Auth Region 用于 Token 刷新，API Region 用于 API 请求
+              </p>
+            </div>
+
+            {/* RPM 限速 */}
+            <div className="space-y-2">
+              <label htmlFor="rpmLimit" className="text-sm font-medium">
+                每分钟请求上限（RPM）
+              </label>
+              <Input
+                id="rpmLimit"
+                type="number"
+                min={0}
+                placeholder="10"
+                value={rpmLimit}
+                onChange={(e) => setRpmLimit(e.target.value)}
+                disabled={isPending}
+              />
+              <p className="text-xs text-muted-foreground">
+                滑动窗口每分钟最多请求数。默认 10；填 0 表示不限速。
               </p>
             </div>
 

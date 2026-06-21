@@ -43,6 +43,7 @@ export function EditCredentialDialog({
   const [proxyPassword, setProxyPassword] = useState('')
   const [groups, setGroups] = useState<string[]>(credential.groups ?? [])
   const [sourceChannel, setSourceChannel] = useState(credential.sourceChannel ?? '')
+  const [rpmLimit, setRpmLimit] = useState(String(credential.rpmLimit ?? 10))
   const [manualMode, setManualMode] = useState(false)
 
   const groupOptions = useGroupOptions()
@@ -62,6 +63,7 @@ export function EditCredentialDialog({
       setProxyPassword('')
       setGroups(credential.groups ?? [])
       setSourceChannel(credential.sourceChannel ?? '')
+      setRpmLimit(String(credential.rpmLimit ?? 10))
       setManualMode(false)
     }
   }, [open, credential])
@@ -81,6 +83,7 @@ export function EditCredentialDialog({
           proxyPassword: proxyPassword || undefined,
           groups: groups,
           sourceChannel: sourceChannel,
+          rpmLimit: rpmLimit.trim() === '' ? undefined : Number(rpmLimit),
         },
       },
       {
@@ -163,6 +166,25 @@ export function EditCredentialDialog({
               />
               <p className="text-xs text-muted-foreground">
                 纯备注，标记此账号的购买来源/渠道，便于追踪。留空表示清除。
+              </p>
+            </div>
+
+            {/* RPM 限速 */}
+            <div className="space-y-2">
+              <label htmlFor="rpmLimit" className="text-sm font-medium">
+                每分钟请求上限（RPM）
+              </label>
+              <Input
+                id="rpmLimit"
+                type="number"
+                min={0}
+                placeholder="10"
+                value={rpmLimit}
+                onChange={(e) => setRpmLimit(e.target.value)}
+                disabled={isPending}
+              />
+              <p className="text-xs text-muted-foreground">
+                滑动窗口每分钟最多请求数。默认 10；填 0 表示不限速。
               </p>
             </div>
 

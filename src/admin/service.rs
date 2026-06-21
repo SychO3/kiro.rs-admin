@@ -1060,6 +1060,7 @@ impl AdminService {
             issuer_url: req.issuer_url,
             scopes: req.scopes,
             priority: req.priority,
+            rpm_limit: req.rpm_limit,
             region: req.region,
             auth_region: req.auth_region,
             api_region: req.api_region,
@@ -1199,6 +1200,7 @@ impl AdminService {
                 req.groups,
                 req.source_channel
                     .map(|v| if v.is_empty() { None } else { Some(v) }),
+                req.rpm_limit,
             )
             .map_err(|e| self.classify_error(e, id))
     }
@@ -2298,6 +2300,7 @@ impl AdminService {
                 None,            // proxy_password 不修改
                 None,            // groups 不修改
                 None,            // source_channel 不修改
+                None,            // rpm_limit 不修改
             )
             .map_err(|e| {
                 let msg = e.to_string();
@@ -2367,7 +2370,7 @@ impl AdminService {
             let url = urls[i % urls.len()].clone();
             if self
                 .token_manager
-                .update_credential(*cred_id, None, Some(Some(url)), None, None, None, None)
+                .update_credential(*cred_id, None, Some(Some(url)), None, None, None, None, None)
                 .is_ok()
             {
                 assigned += 1;
@@ -2531,6 +2534,7 @@ impl AdminService {
         let cred_template = KiroCredentials {
             auth_method: Some("social".to_string()),
             priority: req.priority,
+            rpm_limit: 10, // 默认每分钟 10 次（与普通添加一致；用户可在面板调整）
             email: req.email,
             proxy_url: req.proxy_url,
             ..Default::default()
@@ -2880,6 +2884,7 @@ impl AdminService {
             start_url: Some(start_url.to_string()),
             region: Some(req.region.clone()),
             priority: req.priority,
+            rpm_limit: 10, // 默认每分钟 10 次（与普通添加一致；用户可在面板调整）
             email: req.email,
             proxy_url: req.proxy_url,
             ..Default::default()

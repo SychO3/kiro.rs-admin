@@ -153,6 +153,10 @@ pub struct AddCredentialRequest {
     #[serde(default)]
     pub priority: u32,
 
+    /// 每分钟请求数上限（可选，默认 10；0 表示不限速）
+    #[serde(default = "default_rpm_limit")]
+    pub rpm_limit: u32,
+
     /// 凭据级 Region 配置（用于 OIDC token 刷新）
     /// 未配置时回退到 config.json 的全局 region
     pub region: Option<String>,
@@ -200,6 +204,11 @@ fn default_auth_method() -> String {
     "social".to_string()
 }
 
+/// RPM 上限缺省值：默认每分钟 10 次。
+fn default_rpm_limit() -> u32 {
+    10
+}
+
 /// 更新 refreshToken 请求
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -232,6 +241,9 @@ pub struct UpdateCredentialRequest {
     /// 账号来源渠道（None 表示不修改，空串表示清除）
     #[serde(default)]
     pub source_channel: Option<String>,
+    /// 每分钟请求数上限（None 表示不修改，0 表示不限速）
+    #[serde(default)]
+    pub rpm_limit: Option<u32>,
 }
 
 /// 添加凭据成功响应
