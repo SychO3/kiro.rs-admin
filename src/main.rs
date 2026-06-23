@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use clap::Parser;
-use kiro::endpoint::{CliEndpoint, IdeEndpoint, KiroEndpoint};
+use kiro::endpoint::{CliEndpoint, IdeEndpoint, KiroEndpoint, RuntimeEndpoint};
 use kiro::model::credentials::{CredentialsConfig, KiroCredentials};
 use kiro::provider::KiroProvider;
 use kiro::token_manager::MultiTokenManager;
@@ -122,6 +122,10 @@ async fn main() {
         endpoints.insert(ide.name().to_string(), Arc::new(ide));
         let cli = CliEndpoint::new();
         endpoints.insert(cli.name().to_string(), Arc::new(cli));
+        // runtime.kiro.dev：与 q.amazonaws.com 限流桶独立，作为 ide/cli 的 429 降级目标。
+        // 无需出现在 default_endpoint / 凭据 endpoint 字段里，仅作内部 fallback。
+        let runtime = RuntimeEndpoint::new();
+        endpoints.insert(runtime.name().to_string(), Arc::new(runtime));
     }
 
     // 校验默认端点存在

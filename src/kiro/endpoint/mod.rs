@@ -13,9 +13,11 @@ use crate::model::config::Config;
 
 pub mod cli;
 pub mod ide;
+pub mod runtime;
 
 pub use cli::CliEndpoint;
 pub use ide::IdeEndpoint;
+pub use runtime::RuntimeEndpoint;
 
 /// Kiro 端点
 ///
@@ -23,6 +25,17 @@ pub use ide::IdeEndpoint;
 pub trait KiroEndpoint: Send + Sync {
     /// 端点名称（对应 credentials.endpoint / config.defaultEndpoint 的取值）
     fn name(&self) -> &'static str;
+
+    /// 429 限流时可降级到的备用端点名（一个**独立的限流桶**）。
+    ///
+    /// 实测 `runtime.kiro.dev` 与 `q.amazonaws.com` 限流桶相互独立：一个 429 时
+    /// 另一个仍可 200。`provider.rs` 在收到 429（非账号级风控）时，会用**同一张凭据**
+    /// 立刻在此备用端点上重发一次，换桶不换号；备用端点也 429 才落回换凭据/退避逻辑。
+    ///
+    /// 返回 `None` 表示该端点无备用桶，429 时直接走原有重试逻辑。
+    fn fallback_endpoint(&self) -> Option<&'static str> {
+        None
+    }
 
     /// API 请求的 Content-Type（默认 application/json）
     fn content_type(&self) -> &'static str {

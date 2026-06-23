@@ -163,7 +163,54 @@ impl KiroProvider {
         Ok(client)
     }
 
+    /// 用指定 endpoint 构造并发送一次 API 请求，返回原始响应（不读取 body）。
+    ///
+    /// 从 `call_api_with_retry` 抽出，供主端点与 429 降级后的备用端点共用：
+    /// 两者除 endpoint 实现不同外，凭据 / token / machineId / 请求体来源完全一致。
+    /// 仅负责「构造 URL/body/header → execute」，成功/失败语义由调用方处理。
+    async fn execute_api_request(
+        &self,
+        endpoint: &Arc<dyn KiroEndpoint>,
+        ctx: &crate::kiro::token_manager::CallContext,
+        machine_id: &str,
+        config: &crate::model::config::Config,
+        request_body: &str,
+    ) -> anyhow::Result<reqwest::Response> {
+        let rctx = RequestContext {
+            credentials: &ctx.credentials,
+            token: &ctx.token,
+            machine_id,
+            config,
+        };
+
+        let url = endpoint.api_url(&rctx);
+        let body = endpoint.transform_api_body(request_body, &rctx);
+
+        tracing::debug!("使用端点 [{}] POST {}", endpoint.name(), url);
+        tracing::debug!("实际发送请求体: {}", body);
+
+        let base = self
+            .client_for(&ctx.credentials)?
+            .post(&url)
+            .body(body)
+            .header("content-type", endpoint.content_type())
+            .header("Connection", "close");
+        let request = endpoint.decorate_api(base, &rctx);
+
+        // 打印实际发送的请求头（RUST_LOG=debug 时输出，便于排查问题）
+        let request = request
+            .build()
+            .map_err(|e| anyhow::anyhow!("构建请求失败: {}", e))?;
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            for (k, v) in request.headers() {
+                tracing::debug!("  header {}: {}", k, v.to_str().unwrap_or("<binary>"));
+            }
+        }
+        Ok(self.client_for(&ctx.credentials)?.execute(request).await?)
+    }
+
     /// 根据凭据选择 endpoint 实现
+
     fn endpoint_for(
         &self,
         credentials: &KiroCredentials,
@@ -484,35 +531,10 @@ impl KiroProvider {
             };
             let endpoint_name = endpoint.name();
 
-            let rctx = RequestContext {
-                credentials: &ctx.credentials,
-                token: &ctx.token,
-                machine_id: &machine_id,
-                config,
-            };
-
-            let url = endpoint.api_url(&rctx);
-            let body = endpoint.transform_api_body(request_body, &rctx);
-
-            tracing::debug!("使用端点 [{}] POST {}", endpoint.name(), url);
-            tracing::debug!("实际发送请求体: {}", body);
-
-            let base = self
-                .client_for(&ctx.credentials)?
-                .post(&url)
-                .body(body)
-                .header("content-type", endpoint.content_type())
-                .header("Connection", "close");
-            let request = endpoint.decorate_api(base, &rctx);
-
-            // 打印实际发送的请求头（RUST_LOG=debug 时输出，便于排查问题）
-            let request = request.build().map_err(|e| anyhow::anyhow!("构建请求失败: {}", e))?;
-            if tracing::enabled!(tracing::Level::DEBUG) {
-                for (k, v) in request.headers() {
-                    tracing::debug!("  header {}: {}", k, v.to_str().unwrap_or("<binary>"));
-                }
-            }
-            let response = match self.client_for(&ctx.credentials)?.execute(request).await {
+            let response = match self
+                .execute_api_request(&endpoint, &ctx, &machine_id, config, request_body)
+                .await
+            {
                 Ok(resp) => resp,
                 Err(e) => {
                     tracing::warn!(
@@ -527,7 +549,7 @@ impl KiroProvider {
                     );
                     // 网络错误通常是上游/链路瞬态问题，不应导致"禁用凭据"或"切换凭据"
                     // （否则一段时间网络抖动会把所有凭据都误禁用，需要重启才能恢复）
-                    last_error = Some(e.into());
+                    last_error = Some(e);
                     if attempt + 1 < max_retries {
                         sleep(Self::retry_delay(attempt)).await;
                     }
@@ -726,6 +748,74 @@ impl KiroProvider {
                     attempt_start,
                 );
                 anyhow::bail!("{} API 请求失败: {} {}", api_type, status, body);
+            }
+
+            // 429 端点降级：runtime.kiro.dev 与 q.amazonaws.com 限流桶相互独立，
+            // 一个 429 时另一个仍可 200。收到普通 429（非账号级风控——那分支在上面已先行
+            // 拦截并 continue）时，用**同一张凭据**立刻在备用端点上重发一次：换桶不换号，
+            // 不计入 attempt、不退避、不切凭据。
+            // - 备用端点成功 → 直接返回（trace 记为备用端点 success，可见降级链路）。
+            // - 备用端点也 429 / 其它失败 → 不在此处理，落回下方原有瞬态重试逻辑，
+            //   按「主端点 429」语义退避并在下一轮换凭据（符合“第二端点再 429 就从第一端点重试”）。
+            if status.as_u16() == 429 {
+                if let Some(fb_name) = endpoint.fallback_endpoint() {
+                    if let Some(fb_endpoint) = self.endpoints.get(fb_name).cloned() {
+                        tracing::info!(
+                            "端点 [{}] 限流 429，凭据 #{} 降级到备用端点 [{}] 重试（换桶不换号）",
+                            endpoint_name,
+                            ctx.id,
+                            fb_name
+                        );
+                        let fb_start = Instant::now();
+                        match self
+                            .execute_api_request(&fb_endpoint, &ctx, &machine_id, config, request_body)
+                            .await
+                        {
+                            Ok(fb_resp) if fb_resp.status().is_success() => {
+                                let fb_status = fb_resp.status();
+                                Self::emit_attempt(
+                                    sink, attempt, ctx.id, fb_name, Some(fb_status.as_u16()),
+                                    outcome::SUCCESS, None, fb_start,
+                                );
+                                self.token_manager.report_success(ctx.id);
+                                tracing::info!(
+                                    "凭据 #{} 在备用端点 [{}] 成功（主端点 [{}] 此前 429）",
+                                    ctx.id,
+                                    fb_name,
+                                    endpoint_name
+                                );
+                                return Ok(KiroCallResult {
+                                    response: fb_resp,
+                                    credential_id: ctx.id,
+                                });
+                            }
+                            Ok(fb_resp) => {
+                                let fb_status = fb_resp.status();
+                                let fb_body = fb_resp.text().await.unwrap_or_default();
+                                Self::emit_attempt(
+                                    sink, attempt, ctx.id, fb_name, Some(fb_status.as_u16()),
+                                    outcome::TRANSIENT, Some(&fb_body), fb_start,
+                                );
+                                tracing::warn!(
+                                    "备用端点 [{}] 也失败（{}），落回主端点 429 重试逻辑",
+                                    fb_name,
+                                    fb_status
+                                );
+                            }
+                            Err(e) => {
+                                Self::emit_attempt(
+                                    sink, attempt, ctx.id, fb_name, None,
+                                    outcome::NETWORK_ERROR, Some(&e.to_string()), fb_start,
+                                );
+                                tracing::warn!(
+                                    "备用端点 [{}] 请求发送失败（{}），落回主端点 429 重试逻辑",
+                                    fb_name,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
             }
 
             // 429/408/5xx - 瞬态上游错误：重试但不禁用或切换凭据

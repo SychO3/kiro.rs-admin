@@ -57,6 +57,11 @@ impl KiroEndpoint for CliEndpoint {
         CLI_ENDPOINT_NAME
     }
 
+    /// cli 走 `q.amazonaws.com`；429 时降级到独立限流桶 `runtime.kiro.dev`。
+    fn fallback_endpoint(&self) -> Option<&'static str> {
+        Some(crate::kiro::endpoint::runtime::RUNTIME_ENDPOINT_NAME)
+    }
+
     fn content_type(&self) -> &'static str {
         "application/x-amz-json-1.0"
     }
