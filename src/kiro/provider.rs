@@ -661,6 +661,78 @@ impl KiroProvider {
                 continue;
             }
 
+            // 429 端点降级（换桶不换号）：runtime.kiro.dev 与 q.amazonaws.com 限流桶
+            // 相互独立，一个 429 时另一个仍可 200。
+            //
+            // 关键：本块必须在下方「账号级风控」「瞬态重试」两个 429 分支**之前**执行。
+            // 否则含 "suspicious activity" 的账号级 429 会被风控分支先行拦截、冷却当前
+            // 凭据并换号重试——始终停留在同一端点（q），永远轮不到 runtime，表现为
+            // 「q 端点连续重试几次才切 runtime」。前置后：任何 429 都先用同一张凭据在
+            // 备用端点上立刻重发一次（不计 attempt、不退避、不切凭据）。
+            // - 备用端点成功 → 直接返回（trace 记为备用端点 success，可见降级链路）。
+            // - 备用端点也失败 → 落回下方按原始（主端点）响应体分类处理：账号级风控走
+            //   冷却换号，普通 429 走退避重试；下一轮迭代再以主端点起手，形成 q↔runtime 来回。
+            if status.as_u16() == 429 {
+                if let Some(fb_name) = endpoint.fallback_endpoint() {
+                    if let Some(fb_endpoint) = self.endpoints.get(fb_name).cloned() {
+                        tracing::info!(
+                            "端点 [{}] 限流 429，凭据 #{} 降级到备用端点 [{}] 重试（换桶不换号）",
+                            endpoint_name,
+                            ctx.id,
+                            fb_name
+                        );
+                        let fb_start = Instant::now();
+                        match self
+                            .execute_api_request(&fb_endpoint, &ctx, &machine_id, config, request_body)
+                            .await
+                        {
+                            Ok(fb_resp) if fb_resp.status().is_success() => {
+                                let fb_status = fb_resp.status();
+                                Self::emit_attempt(
+                                    sink, attempt, ctx.id, fb_name, Some(fb_status.as_u16()),
+                                    outcome::SUCCESS, None, fb_start,
+                                );
+                                self.token_manager.report_success(ctx.id);
+                                tracing::info!(
+                                    "凭据 #{} 在备用端点 [{}] 成功（主端点 [{}] 此前 429）",
+                                    ctx.id,
+                                    fb_name,
+                                    endpoint_name
+                                );
+                                return Ok(KiroCallResult {
+                                    response: fb_resp,
+                                    credential_id: ctx.id,
+                                });
+                            }
+                            Ok(fb_resp) => {
+                                let fb_status = fb_resp.status();
+                                let fb_body = fb_resp.text().await.unwrap_or_default();
+                                Self::emit_attempt(
+                                    sink, attempt, ctx.id, fb_name, Some(fb_status.as_u16()),
+                                    outcome::TRANSIENT, Some(&fb_body), fb_start,
+                                );
+                                tracing::warn!(
+                                    "备用端点 [{}] 也失败（{}），落回主端点 429 分类处理",
+                                    fb_name,
+                                    fb_status
+                                );
+                            }
+                            Err(e) => {
+                                Self::emit_attempt(
+                                    sink, attempt, ctx.id, fb_name, None,
+                                    outcome::NETWORK_ERROR, Some(&e.to_string()), fb_start,
+                                );
+                                tracing::warn!(
+                                    "备用端点 [{}] 请求发送失败（{}），落回主端点 429 分类处理",
+                                    fb_name,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
             // 429 + suspicious activity = 账号级临时风控
             // 仅当前凭据被针对，故障转移到其它凭据可立即恢复（受配置开关控制）。
             if status.as_u16() == 429
@@ -750,76 +822,10 @@ impl KiroProvider {
                 anyhow::bail!("{} API 请求失败: {} {}", api_type, status, body);
             }
 
-            // 429 端点降级：runtime.kiro.dev 与 q.amazonaws.com 限流桶相互独立，
-            // 一个 429 时另一个仍可 200。收到普通 429（非账号级风控——那分支在上面已先行
-            // 拦截并 continue）时，用**同一张凭据**立刻在备用端点上重发一次：换桶不换号，
-            // 不计入 attempt、不退避、不切凭据。
-            // - 备用端点成功 → 直接返回（trace 记为备用端点 success，可见降级链路）。
-            // - 备用端点也 429 / 其它失败 → 不在此处理，落回下方原有瞬态重试逻辑，
-            //   按「主端点 429」语义退避并在下一轮换凭据（符合“第二端点再 429 就从第一端点重试”）。
-            if status.as_u16() == 429 {
-                if let Some(fb_name) = endpoint.fallback_endpoint() {
-                    if let Some(fb_endpoint) = self.endpoints.get(fb_name).cloned() {
-                        tracing::info!(
-                            "端点 [{}] 限流 429，凭据 #{} 降级到备用端点 [{}] 重试（换桶不换号）",
-                            endpoint_name,
-                            ctx.id,
-                            fb_name
-                        );
-                        let fb_start = Instant::now();
-                        match self
-                            .execute_api_request(&fb_endpoint, &ctx, &machine_id, config, request_body)
-                            .await
-                        {
-                            Ok(fb_resp) if fb_resp.status().is_success() => {
-                                let fb_status = fb_resp.status();
-                                Self::emit_attempt(
-                                    sink, attempt, ctx.id, fb_name, Some(fb_status.as_u16()),
-                                    outcome::SUCCESS, None, fb_start,
-                                );
-                                self.token_manager.report_success(ctx.id);
-                                tracing::info!(
-                                    "凭据 #{} 在备用端点 [{}] 成功（主端点 [{}] 此前 429）",
-                                    ctx.id,
-                                    fb_name,
-                                    endpoint_name
-                                );
-                                return Ok(KiroCallResult {
-                                    response: fb_resp,
-                                    credential_id: ctx.id,
-                                });
-                            }
-                            Ok(fb_resp) => {
-                                let fb_status = fb_resp.status();
-                                let fb_body = fb_resp.text().await.unwrap_or_default();
-                                Self::emit_attempt(
-                                    sink, attempt, ctx.id, fb_name, Some(fb_status.as_u16()),
-                                    outcome::TRANSIENT, Some(&fb_body), fb_start,
-                                );
-                                tracing::warn!(
-                                    "备用端点 [{}] 也失败（{}），落回主端点 429 重试逻辑",
-                                    fb_name,
-                                    fb_status
-                                );
-                            }
-                            Err(e) => {
-                                Self::emit_attempt(
-                                    sink, attempt, ctx.id, fb_name, None,
-                                    outcome::NETWORK_ERROR, Some(&e.to_string()), fb_start,
-                                );
-                                tracing::warn!(
-                                    "备用端点 [{}] 请求发送失败（{}），落回主端点 429 重试逻辑",
-                                    fb_name,
-                                    e
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
             // 429/408/5xx - 瞬态上游错误：重试但不禁用或切换凭据
             // （避免 429 high traffic / 502 high load 等瞬态错误把所有凭据锁死）
+            // 注：429 的备用端点降级已在上方「账号级风控」分支之前统一处理过；
+            // 走到这里说明主端点 429 且备用端点也失败，按瞬态错误退避重试。
             if matches!(status.as_u16(), 408 | 429) || status.is_server_error() {
                 tracing::warn!(
                     "API 请求失败（上游瞬态错误，尝试 {}/{}）: {} {}",
