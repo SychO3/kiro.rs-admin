@@ -22,6 +22,7 @@ import {
 import type { AddCredentialRequest } from '@/types/api'
 import {
   completeExternalIdpImportFields,
+  deriveEmailFromAccessToken,
   extractErrorMessage,
   normalizeImportAuthMethod,
   sha256Hex,
@@ -169,9 +170,10 @@ function normalizeImportEntry(raw: unknown): CredentialInput {
   if (merged.provider == null && obj.idp != null) {
     merged.provider = obj.idp
   }
+  const accessToken = preferString(merged, 'accessToken', 'access_token')
   const normalized: CredentialInput = {
     refreshToken: preferString(merged, 'refreshToken', 'refresh_token'),
-    accessToken: preferString(merged, 'accessToken', 'access_token'),
+    accessToken,
     profileArn: preferString(merged, 'profileArn', 'profile_arn'),
     expiresAt: normalizeExpiresAt(merged.expiresAt ?? merged.expires_at ?? merged.expired),
     clientId: preferString(merged, 'clientId', 'client_id'),
@@ -191,7 +193,7 @@ function normalizeImportEntry(raw: unknown): CredentialInput {
     scopes: preferString(merged, 'scopes'),
     startUrl: preferString(merged, 'startUrl', 'start_url'),
     endpoint: preferString(merged, 'endpoint'),
-    email: preferString(merged, 'email'),
+    email: preferString(merged, 'email') || deriveEmailFromAccessToken(accessToken),
     status: preferString(merged, 'status'),
     proxyUrl: preferString(merged, 'proxyUrl', 'proxy_url'),
     proxyUsername: preferString(merged, 'proxyUsername', 'proxy_username'),

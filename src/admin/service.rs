@@ -48,6 +48,15 @@ const UPDATE_CHECK_TTL_SECS: i64 = 1800;
 
 const DEFAULT_RESPONSE_TEST_MODEL: &str = "claude-sonnet-4-6";
 
+fn normalize_import_email(raw_email: Option<String>, access_token: Option<&str>) -> Option<String> {
+    raw_email
+        .as_deref()
+        .map(str::trim)
+        .filter(|email| !email.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| access_token.and_then(social::extract_email_from_jwt))
+}
+
 fn normalize_proxy_list(raw: &str) -> Result<Option<String>, AdminServiceError> {
     let candidates = ProxyConfig::split_candidates(raw);
     if candidates.is_empty() {
@@ -1171,8 +1180,10 @@ impl AdminService {
             None => None,
         };
 
-        // 构建凭据对象
-        let email = req.email.clone();
+        // 构建凭据对象。部分导出格式不带 email，但 accessToken 里通常有
+        // preferred_username / email / upn，可在导入时最佳努力补齐。
+        let email = normalize_import_email(req.email.take(), req.access_token.as_deref());
+        req.email = email.clone();
         let new_cred = KiroCredentials {
             id: None,
             access_token: req.access_token,
@@ -1193,7 +1204,7 @@ impl AdminService {
             auth_region: req.auth_region,
             api_region: req.api_region,
             machine_id: req.machine_id,
-            email: req.email,
+            email: email.clone(),
             subscription_title: None, // 将在首次获取使用额度时自动更新
             proxy_url: req.proxy_url,
             proxy_username: req.proxy_username,
@@ -3453,6 +3464,25 @@ mod tests {
         assert_eq!(compare_semver("v0.3.1", "0.3.1"), Ordering::Equal);
         assert_eq!(compare_semver("1.0.0", "0.99.99"), Ordering::Greater);
         assert_eq!(compare_semver("0.3.1-rc.1", "0.3.1"), Ordering::Equal);
+    }
+
+    #[test]
+    fn normalize_import_email_falls_back_to_jwt_claim() {
+        use base64::{Engine as _, engine::general_purpose};
+
+        let payload = general_purpose::URL_SAFE_NO_PAD
+            .encode(br#"{"preferred_username":"orlando@example.com"}"#);
+        let token = format!("header.{}.signature", payload);
+
+        assert_eq!(
+            normalize_import_email(None, Some(&token)).as_deref(),
+            Some("orlando@example.com")
+        );
+        assert_eq!(
+            normalize_import_email(Some(" explicit@example.com ".to_string()), Some(&token))
+                .as_deref(),
+            Some("explicit@example.com")
+        );
     }
 
     #[test]

@@ -282,6 +282,18 @@ function deriveJwtIssuer(accessToken: string | undefined): string | undefined {
   return typeof payload?.iss === 'string' ? payload.iss : undefined
 }
 
+export function deriveEmailFromAccessToken(accessToken: string | undefined): string | undefined {
+  const payload = decodeJwtPayload(accessToken)
+  for (const claim of ['email', 'preferred_username', 'upn']) {
+    const value = payload?.[claim]
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      if (trimmed) return trimmed
+    }
+  }
+  return undefined
+}
+
 function deriveExternalIdpScopesFromAccessToken(
   accessToken: string | undefined,
   clientId: string | undefined,
