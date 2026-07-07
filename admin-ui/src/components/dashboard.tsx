@@ -1553,7 +1553,13 @@ export function Dashboard({ onLogout, embedded = false }: DashboardProps) {
                     onSelect={() => setSocialLoginDialogOpen(true)}
                   >
                     <LogIn />
-                    Kiro 账号登录
+                    Kiro Hosted 登录 (Google / GitHub)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() => setSocialLoginDialogOpen(true)}
+                  >
+                    <Building2 />
+                    企业 SSO (Entra ID / Azure AD) 登录
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     onSelect={() => setIdcLoginDialogOpen(true)}

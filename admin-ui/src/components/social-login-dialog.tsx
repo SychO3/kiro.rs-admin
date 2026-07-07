@@ -260,9 +260,9 @@ export function SocialLoginDialog({ open, onOpenChange, onSuccess }: SocialLogin
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Kiro 账号登录（Google / GitHub / 企业 SSO）</DialogTitle>
+          <DialogTitle>Kiro Hosted 登录（Google / GitHub / 企业 SSO）</DialogTitle>
           <DialogDescription>
-            通过 Kiro 网页端完成账号登录，无需手动导出 refreshToken。
+            通过 Kiro 网页端完成账号登录；企业账号会进入 Entra ID / Azure AD 二段授权。
           </DialogDescription>
         </DialogHeader>
 

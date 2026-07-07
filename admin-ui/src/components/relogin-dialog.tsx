@@ -392,11 +392,11 @@ export function ReloginDialog({ open, onOpenChange, credential }: ReloginDialogP
             <div className="grid gap-2">
               <button
                 onClick={() => { setMethod('social'); setStep('form') }}
-                className={`flex items-start gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-accent ${authMethod === 'social' ? 'border-primary bg-accent/50' : ''}`}
+                className={`flex items-start gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-accent ${authMethod === 'social' || authMethod === 'external_idp' ? 'border-primary bg-accent/50' : ''}`}
               >
                 <div>
-                  <p className="text-sm font-medium">Social 登录（Google / GitHub）</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">通过 Kiro 网页端完成 OAuth 授权</p>
+                  <p className="text-sm font-medium">Kiro Hosted / 企业 SSO 登录</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">支持 Google、GitHub 和 Entra ID / Azure AD 二段授权</p>
                 </div>
               </button>
               <button
