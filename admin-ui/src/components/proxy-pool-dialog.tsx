@@ -21,8 +21,8 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   getProxyPool,
@@ -36,13 +36,11 @@ import {
   setProxyBalancingMode,
   PROXY_BALANCING_LABEL,
   checkProxy,
-  checkProxyUrl,
-  checkAllProxies,
   assignProxiesRoundRobin,
   type ProxyBalancingMode,
 } from '@/api/credentials'
 import { extractErrorMessage, maskProxyUrl } from '@/lib/utils'
-import type { ProxyCheckResponse, ProxyPoolEntry } from '@/types/api'
+import type { ProxyPoolEntry } from '@/types/api'
 
 interface ProxyPoolDialogProps {
   open: boolean
@@ -58,21 +56,32 @@ function splitProxyCandidates(raw: string): string[] {
     .filter(Boolean)
 }
 
-function maskProxyCandidate(candidate: string): string {
-  return candidate.toLowerCase() === 'direct' ? 'direct' : maskProxyUrl(candidate)
+function normalizeProxyCandidates(candidates: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of candidates) {
+    const value = raw.trim()
+    if (!value) continue
+    const key = value.toLowerCase() === 'direct' ? 'direct' : value
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(key === 'direct' ? 'direct' : value)
+  }
+  return out
 }
 
 const PROXY_MODE_OPTIONS: ProxyBalancingMode[] = ['sticky', 'round_robin', 'least_load']
+type BatchAction = 'check' | 'enable' | 'disable' | 'global' | 'unglobal' | null
 
 export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPoolDialogProps) {
   const [newUrl, setNewUrl] = useState('')
   const [newLabel, setNewLabel] = useState('')
   const [batchText, setBatchText] = useState('')
   const [showBatch, setShowBatch] = useState(false)
-  const [globalProxyText, setGlobalProxyText] = useState('')
   const [batchErrors, setBatchErrors] = useState<string[]>([])
-  const [checkingGlobalUrl, setCheckingGlobalUrl] = useState<string | null>(null)
-  const [globalCheckResults, setGlobalCheckResults] = useState<Record<string, ProxyCheckResponse>>({})
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set())
+  const [checkingIds, setCheckingIds] = useState<Set<number>>(() => new Set())
+  const [batchAction, setBatchAction] = useState<BatchAction>(null)
   const queryClient = useQueryClient()
 
   const { data, isLoading } = useQuery({
@@ -107,7 +116,6 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
     onSuccess: (_, url) => {
       const count = url ? splitProxyCandidates(url).length : 0
       toast.success(url ? `已设置 ${count} 个全局代理候选` : '已清除全局代理')
-      setGlobalProxyText('')
       queryClient.invalidateQueries({ queryKey: ['global-proxy'] })
     },
     onError: (err) => toast.error(`操作失败: ${extractErrorMessage(err)}`),
@@ -115,8 +123,23 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
 
   const currentGlobalProxy = globalProxyData?.proxyUrl ?? null
   const globalProxyCandidates = currentGlobalProxy ? splitProxyCandidates(currentGlobalProxy) : []
-  const globalProxyCandidateSet = new Set(globalProxyCandidates)
-  const proxyByUrl = new Map((data?.proxies ?? []).map((proxy) => [proxy.url, proxy]))
+  const globalProxyCandidateSet = new Set(globalProxyCandidates.filter((c) => c.toLowerCase() !== 'direct'))
+  const directGlobalEnabled = globalProxyCandidates.some((c) => c.toLowerCase() === 'direct')
+  const proxies = data?.proxies ?? []
+  const selectedProxies = proxies.filter((proxy) => selectedIds.has(proxy.id))
+  const selectedCount = selectedProxies.length
+  const allSelected = proxies.length > 0 && selectedCount === proxies.length
+  let allProxyCheckboxState: boolean | 'indeterminate' = false
+  if (allSelected) {
+    allProxyCheckboxState = true
+  } else if (selectedCount > 0) {
+    allProxyCheckboxState = 'indeterminate'
+  }
+  const globalPoolCount = proxies.filter((proxy) => globalProxyCandidateSet.has(proxy.url)).length
+  const orphanGlobalCandidates = globalProxyCandidates.filter(
+    (candidate) =>
+      candidate.toLowerCase() !== 'direct' && !proxies.some((proxy) => proxy.url === candidate)
+  )
 
   const addMutation = useMutation({
     mutationFn: () => addProxy({ url: newUrl.trim(), label: newLabel.trim() || undefined }),
@@ -147,65 +170,6 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
     onError: (err) => toast.error(`批量导入失败: ${extractErrorMessage(err)}`),
   })
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: number) => deleteProxy(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['proxy-pool'] })
-    },
-    onError: (err) => toast.error(`删除失败: ${extractErrorMessage(err)}`),
-  })
-
-  const toggleMutation = useMutation({
-    mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
-      setProxyEnabled(id, enabled),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['proxy-pool'] })
-    },
-    onError: (err) => toast.error(`操作失败: ${extractErrorMessage(err)}`),
-  })
-
-  const [checkingId, setCheckingId] = useState<number | null>(null)
-  const checkMutation = useMutation({
-    mutationFn: (id: number) => checkProxy(id),
-    onMutate: (id) => setCheckingId(id),
-    onSuccess: (res) => {
-      if (res.health === 'healthy') {
-        toast.success(`代理可用，延迟 ${res.latencyMs ?? '-'} ms`)
-      } else {
-        toast.error(res.autoDisabled ? '代理探测失败，已自动禁用' : '代理探测失败')
-      }
-      queryClient.invalidateQueries({ queryKey: ['proxy-pool'] })
-    },
-    onError: (err) => toast.error(`探测失败: ${extractErrorMessage(err)}`),
-    onSettled: () => setCheckingId(null),
-  })
-
-  const checkGlobalUrlMutation = useMutation({
-    mutationFn: (url: string) => checkProxyUrl({ url }),
-    onMutate: (url) => setCheckingGlobalUrl(url),
-    onSuccess: (res, url) => {
-      setGlobalCheckResults((prev) => ({ ...prev, [url]: res }))
-      if (res.health === 'healthy') {
-        toast.success(`代理可用，延迟 ${res.latencyMs ?? '-'} ms`)
-      } else {
-        toast.error('代理探测失败')
-      }
-    },
-    onError: (err) => toast.error(`探测失败: ${extractErrorMessage(err)}`),
-    onSettled: () => setCheckingGlobalUrl(null),
-  })
-
-  const checkAllMutation = useMutation({
-    mutationFn: () => checkAllProxies(),
-    onSuccess: (res) => {
-      toast.success(
-        `健康检查完成：健康 ${res.healthy}，异常 ${res.unhealthy}，自动禁用 ${res.autoDisabled}`
-      )
-      queryClient.invalidateQueries({ queryKey: ['proxy-pool'] })
-    },
-    onError: (err) => toast.error(`检查失败: ${extractErrorMessage(err)}`),
-  })
-
   const assignRoundRobinMutation = useMutation({
     mutationFn: () => assignProxiesRoundRobin(null),
     onSuccess: (res) => {
@@ -222,9 +186,182 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
     addMutation.mutate()
   }
 
-  const deleteGlobalCandidate = (index: number) => {
-    const next = globalProxyCandidates.filter((_, i) => i !== index)
-    setGlobalProxyMutation.mutate(next.length > 0 ? next.join('\n') : null)
+  const saveGlobalCandidates = (candidates: string[]) => {
+    const next = normalizeProxyCandidates(candidates)
+    return setGlobalProxyMutation.mutateAsync(next.length > 0 ? next.join('\n') : null)
+  }
+
+  const toggleSelected = (id: number, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
+
+  const toggleAllSelected = (checked: boolean) => {
+    setSelectedIds(checked ? new Set(proxies.map((proxy) => proxy.id)) : new Set())
+  }
+
+  const toggleProxyGlobal = async (proxy: ProxyPoolEntry, checked: boolean) => {
+    try {
+      const next = checked
+        ? [...globalProxyCandidates, proxy.url]
+        : globalProxyCandidates.filter((candidate) => candidate !== proxy.url)
+      await saveGlobalCandidates(next)
+    } catch {
+      // setGlobalProxyMutation already shows the toast.
+    }
+  }
+
+  const toggleDirectFallback = async (checked: boolean) => {
+    try {
+      const next = checked
+        ? [...globalProxyCandidates, 'direct']
+        : globalProxyCandidates.filter((candidate) => candidate.toLowerCase() !== 'direct')
+      await saveGlobalCandidates(next)
+    } catch {
+      // setGlobalProxyMutation already shows the toast.
+    }
+  }
+
+  const handleSetProxyEnabled = async (proxy: ProxyPoolEntry, enabled: boolean) => {
+    try {
+      await setProxyEnabled(proxy.id, enabled)
+      if (!enabled && globalProxyCandidateSet.has(proxy.url)) {
+        await saveGlobalCandidates(globalProxyCandidates.filter((candidate) => candidate !== proxy.url))
+      }
+      queryClient.invalidateQueries({ queryKey: ['proxy-pool'] })
+    } catch (err) {
+      toast.error(`操作失败: ${extractErrorMessage(err)}`)
+    }
+  }
+
+  const handleDeleteProxy = async (proxy: ProxyPoolEntry) => {
+    try {
+      await deleteProxy(proxy.id)
+      if (globalProxyCandidateSet.has(proxy.url)) {
+        await saveGlobalCandidates(globalProxyCandidates.filter((candidate) => candidate !== proxy.url))
+      }
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        next.delete(proxy.id)
+        return next
+      })
+      queryClient.invalidateQueries({ queryKey: ['proxy-pool'] })
+    } catch (err) {
+      toast.error(`删除失败: ${extractErrorMessage(err)}`)
+    }
+  }
+
+  const handleBatchEnabled = async (enabled: boolean) => {
+    if (selectedCount === 0) return
+    setBatchAction(enabled ? 'enable' : 'disable')
+    try {
+      await Promise.all(selectedProxies.map((proxy) => setProxyEnabled(proxy.id, enabled)))
+      if (!enabled) {
+        const disabledUrls = new Set(selectedProxies.map((proxy) => proxy.url))
+        await saveGlobalCandidates(
+          globalProxyCandidates.filter((candidate) => !disabledUrls.has(candidate))
+        )
+      }
+      toast.success(`已${enabled ? '启用' : '禁用'} ${selectedCount} 个代理`)
+      queryClient.invalidateQueries({ queryKey: ['proxy-pool'] })
+    } catch (err) {
+      toast.error(`批量${enabled ? '启用' : '禁用'}失败: ${extractErrorMessage(err)}`)
+    } finally {
+      setBatchAction(null)
+    }
+  }
+
+  const handleBatchGlobal = async (enabled: boolean) => {
+    if (selectedCount === 0) return
+    setBatchAction(enabled ? 'global' : 'unglobal')
+    try {
+      const selectedUrls = selectedProxies
+        .filter((proxy) => enabled ? proxy.enabled : true)
+        .map((proxy) => proxy.url)
+      if (enabled && selectedUrls.length === 0) {
+        toast.info('选中的代理都未启用，先启用后再设为全局')
+        return
+      }
+      const selectedSet = new Set(selectedUrls)
+      const next = enabled
+        ? [...globalProxyCandidates, ...selectedUrls]
+        : globalProxyCandidates.filter((candidate) => !selectedSet.has(candidate))
+      await saveGlobalCandidates(next)
+    } catch {
+      // setGlobalProxyMutation already shows the toast.
+    } finally {
+      setBatchAction(null)
+    }
+  }
+
+  const handleImportOrphanGlobalCandidates = async () => {
+    if (orphanGlobalCandidates.length === 0) return
+    setBatchAction('global')
+    try {
+      const res = await batchAddProxies({ urls: orphanGlobalCandidates })
+      if (res.errors === 0) {
+        toast.success(`已导入 ${res.added} 个旧全局代理到代理池`)
+      } else {
+        toast.info(`已导入 ${res.added} 个旧全局代理，跳过 ${res.errors} 个`)
+      }
+      queryClient.invalidateQueries({ queryKey: ['proxy-pool'] })
+    } catch (err) {
+      toast.error(`导入失败: ${extractErrorMessage(err)}`)
+    } finally {
+      setBatchAction(null)
+    }
+  }
+
+  const handleCheckOne = async (proxy: ProxyPoolEntry) => {
+    setCheckingIds((prev) => new Set(prev).add(proxy.id))
+    try {
+      const res = await checkProxy(proxy.id)
+      if (res.health === 'healthy') {
+        toast.success(`代理可用，延迟 ${res.latencyMs ?? '-'} ms`)
+      } else {
+        toast.error(res.autoDisabled ? '代理探测失败，已自动禁用' : '代理探测失败')
+      }
+      queryClient.invalidateQueries({ queryKey: ['proxy-pool'] })
+    } catch (err) {
+      toast.error(`探测失败: ${extractErrorMessage(err)}`)
+    } finally {
+      setCheckingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(proxy.id)
+        return next
+      })
+    }
+  }
+
+  const handleBatchCheck = async () => {
+    const targets = selectedCount > 0 ? selectedProxies : proxies.filter((proxy) => proxy.enabled)
+    if (targets.length === 0) return
+    setBatchAction('check')
+    setCheckingIds((prev) => {
+      const next = new Set(prev)
+      targets.forEach((proxy) => next.add(proxy.id))
+      return next
+    })
+    try {
+      const results = await Promise.allSettled(targets.map((proxy) => checkProxy(proxy.id)))
+      const healthy = results.filter(
+        (result) => result.status === 'fulfilled' && result.value.health === 'healthy'
+      ).length
+      const failed = results.length - healthy
+      toast.success(`批量测试完成：可用 ${healthy}，异常 ${failed}`)
+      queryClient.invalidateQueries({ queryKey: ['proxy-pool'] })
+    } finally {
+      setCheckingIds((prev) => {
+        const next = new Set(prev)
+        targets.forEach((proxy) => next.delete(proxy.id))
+        return next
+      })
+      setBatchAction(null)
+    }
   }
 
   const renderHealthBadge = (proxy: ProxyPoolEntry) => {
@@ -248,31 +385,6 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
       <Badge variant="outline" className="text-xs gap-1 text-muted-foreground">
         <HelpCircle className="h-3 w-3" />
         未检测
-      </Badge>
-    )
-  }
-
-  const renderCheckResultBadge = (result?: ProxyCheckResponse) => {
-    if (!result) {
-      return (
-        <Badge variant="outline" className="text-xs gap-1 text-muted-foreground">
-          <HelpCircle className="h-3 w-3" />
-          未检测
-        </Badge>
-      )
-    }
-    if (result.health === 'healthy') {
-      return (
-        <Badge variant="outline" className="text-xs gap-1 border-green-500/50 text-green-600 dark:text-green-400">
-          <CheckCircle2 className="h-3 w-3" />
-          {result.latencyMs != null ? `${result.latencyMs}ms` : '可用'}
-        </Badge>
-      )
-    }
-    return (
-      <Badge variant="outline" className="text-xs gap-1 border-destructive/50 text-destructive">
-        <XCircle className="h-3 w-3" />
-        异常
       </Badge>
     )
   }
@@ -388,137 +500,132 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
             </div>
           )}
 
-          {/* 全局代理显示 */}
-          <div className="rounded-md border p-3 space-y-2">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Globe className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm font-medium">全局代理</span>
-              </div>
-              {currentGlobalProxy && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-6 text-xs text-destructive hover:text-destructive"
-                  onClick={() => setGlobalProxyMutation.mutate(null)}
-                  disabled={setGlobalProxyMutation.isPending}
-                >
-                  清除
-                </Button>
-              )}
-            </div>
-            {globalProxyCandidates.length > 0 ? (
-              <div className="rounded-md border divide-y">
-                {globalProxyCandidates.map((candidate, index) => {
-                  const poolEntry = proxyByUrl.get(candidate)
-                  const isDirect = candidate.toLowerCase() === 'direct'
-                  const checkingPool = poolEntry ? checkingId === poolEntry.id : false
-                  const checkingTemp = checkingGlobalUrl === candidate
-                  return (
-                    <div key={`${candidate}-${index}`} className="flex items-center gap-3 p-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-mono text-xs truncate">
-                            {maskProxyCandidate(candidate)}
-                          </span>
-                          {isDirect ? (
-                            <Badge variant="secondary" className="text-xs">直连兜底</Badge>
-                          ) : poolEntry ? (
-                            renderHealthBadge(poolEntry)
-                          ) : (
-                            renderCheckResultBadge(globalCheckResults[candidate])
-                          )}
-                          {poolEntry && !poolEntry.enabled && (
-                            <Badge variant="outline" className="text-xs text-muted-foreground">
-                              {poolEntry.autoDisabled ? '池内自动禁用' : '池内已禁用'}
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        {!isDirect && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 text-xs"
-                            onClick={() => {
-                              if (poolEntry) checkMutation.mutate(poolEntry.id)
-                              else checkGlobalUrlMutation.mutate(candidate)
-                            }}
-                            disabled={checkingPool || checkingTemp}
-                            title="测试此代理连通性"
-                          >
-                            <Activity className="h-3 w-3 mr-1" />
-                            {checkingPool || checkingTemp ? '测试中' : '测试'}
-                          </Button>
-                        )}
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-7 w-7 p-0 text-destructive hover:text-destructive"
-                          onClick={() => deleteGlobalCandidate(index)}
-                          disabled={setGlobalProxyMutation.isPending}
-                          title="从全局代理候选中删除"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            ) : (
-              <div className="text-xs text-muted-foreground">未配置（直连）</div>
-            )}
-            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-              <Textarea
-                value={globalProxyText}
-                onChange={(e) => setGlobalProxyText(e.target.value)}
-                placeholder={'http://user:pass@host1:8080\nsocks5://user:pass@host2:1080\ndirect'}
-                className="min-h-[76px] font-mono text-xs"
-                disabled={setGlobalProxyMutation.isPending}
-              />
-              <Button
-                size="sm"
-                className="self-end"
-                onClick={() => setGlobalProxyMutation.mutate(globalProxyText.trim())}
-                disabled={setGlobalProxyMutation.isPending || !globalProxyText.trim()}
-              >
-                保存
-              </Button>
-            </div>
-          </div>
-
           {/* 代理列表 */}
           <div className="space-y-1">
-            <div className="flex items-center justify-between">
-              <div className="text-sm text-muted-foreground">
-                共 {data?.total ?? 0} 个代理
+            <div className="space-y-2">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                  {(data?.total ?? 0) > 0 && (
+                    <Checkbox
+                      checked={allProxyCheckboxState}
+                      onCheckedChange={(checked) => toggleAllSelected(checked === true)}
+                      title={allSelected ? '取消全选' : '全选代理'}
+                    />
+                  )}
+                  <span>共 {data?.total ?? 0} 个代理</span>
+                  <Badge variant="secondary" className="text-xs">
+                    全局 {globalPoolCount}{directGlobalEnabled ? ' + 直连' : ''}
+                  </Badge>
+                  {selectedCount > 0 && (
+                    <Badge variant="outline" className="text-xs">
+                      已选 {selectedCount}
+                    </Badge>
+                  )}
+                </div>
+                {(data?.total ?? 0) > 0 && (
+                  <div className="flex flex-wrap items-center gap-1">
+                    <label className="inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs">
+                      <Checkbox
+                        checked={directGlobalEnabled}
+                        onCheckedChange={(checked) => toggleDirectFallback(checked === true)}
+                        disabled={setGlobalProxyMutation.isPending}
+                      />
+                      直连兜底
+                    </label>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={handleBatchCheck}
+                      disabled={batchAction === 'check' || proxies.length === 0}
+                      title={selectedCount > 0 ? '测试选中的代理' : '测试所有已启用代理'}
+                    >
+                      <Activity className="h-3 w-3 mr-1" />
+                      {batchAction === 'check' ? '测试中...' : '批量测试'}
+                    </Button>
+                    {selectedCount > 0 && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs"
+                          onClick={() => handleBatchEnabled(true)}
+                          disabled={batchAction !== null}
+                        >
+                          启用
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs"
+                          onClick={() => handleBatchEnabled(false)}
+                          disabled={batchAction !== null}
+                        >
+                          禁用
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs"
+                          onClick={() => handleBatchGlobal(true)}
+                          disabled={batchAction !== null || setGlobalProxyMutation.isPending}
+                        >
+                          设为全局
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs"
+                          onClick={() => handleBatchGlobal(false)}
+                          disabled={batchAction !== null || setGlobalProxyMutation.isPending}
+                        >
+                          取消全局
+                        </Button>
+                      </>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={() => assignRoundRobinMutation.mutate()}
+                      disabled={assignRoundRobinMutation.isPending}
+                      title="将可用代理轮询分配给所有凭据"
+                    >
+                      <Shuffle className="h-3 w-3 mr-1" />
+                      轮询分配
+                    </Button>
+                  </div>
+                )}
               </div>
-              {(data?.total ?? 0) > 0 && (
-                <div className="flex items-center gap-1">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 text-xs"
-                    onClick={() => checkAllMutation.mutate()}
-                    disabled={checkAllMutation.isPending}
-                    title="对所有已启用代理执行健康检查"
-                  >
-                    <Activity className="h-3 w-3 mr-1" />
-                    {checkAllMutation.isPending ? '检测中...' : '全部检测'}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 text-xs"
-                    onClick={() => assignRoundRobinMutation.mutate()}
-                    disabled={assignRoundRobinMutation.isPending}
-                    title="将可用代理轮询分配给所有凭据"
-                  >
-                    <Shuffle className="h-3 w-3 mr-1" />
-                    轮询分配
-                  </Button>
+              {orphanGlobalCandidates.length > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-700 dark:text-yellow-300">
+                  <span>有 {orphanGlobalCandidates.length} 个旧全局代理还不在代理池里。</span>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={handleImportOrphanGlobalCandidates}
+                      disabled={batchAction !== null}
+                    >
+                      移入代理池
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs"
+                      onClick={() => {
+                        saveGlobalCandidates(
+                          globalProxyCandidates.filter(
+                            (candidate) => !orphanGlobalCandidates.includes(candidate)
+                          )
+                        ).catch(() => undefined)
+                      }}
+                      disabled={setGlobalProxyMutation.isPending}
+                    >
+                      移除旧项
+                    </Button>
+                  </div>
                 </div>
               )}
             </div>
@@ -534,102 +641,111 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
             )}
 
             <div className="border rounded-md divide-y max-h-[320px] overflow-y-auto">
-              {data?.proxies.map((proxy: ProxyPoolEntry) => (
-                <div key={proxy.id} className="flex items-center gap-3 p-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-mono text-xs truncate">
-                        {maskProxyUrl(proxy.url)}
-                      </span>
-                      {proxy.label && (
-                        <Badge variant="secondary" className="text-xs">{proxy.label}</Badge>
-                      )}
-                      {renderHealthBadge(proxy)}
-                      {!proxy.enabled && (
-                        <Badge variant="outline" className="text-xs text-muted-foreground">
-                          {proxy.autoDisabled ? '自动禁用' : '已禁用'}
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3 mt-0.5">
-                      {proxy.credentialCount > 0 && (
-                        <span className="text-xs text-muted-foreground">
-                          {proxy.credentialCount} 个凭据使用中
+              {proxies.map((proxy: ProxyPoolEntry) => {
+                const isGlobal = globalProxyCandidateSet.has(proxy.url)
+                const isChecking = checkingIds.has(proxy.id)
+                return (
+                  <div key={proxy.id} className="flex items-center gap-3 p-3">
+                    <Checkbox
+                      checked={selectedIds.has(proxy.id)}
+                      onCheckedChange={(checked) => toggleSelected(proxy.id, checked === true)}
+                      title="选择此代理"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-mono text-xs truncate">
+                          {maskProxyUrl(proxy.url)}
                         </span>
-                      )}
-                      {proxy.lastCheckedAt && (
-                        <span className="text-xs text-muted-foreground">
-                          检测于 {new Date(proxy.lastCheckedAt).toLocaleString()}
-                        </span>
-                      )}
+                        {proxy.label && (
+                          <Badge variant="secondary" className="text-xs">{proxy.label}</Badge>
+                        )}
+                        {isGlobal && (
+                          <Badge variant="secondary" className="text-xs gap-1">
+                            <Globe className="h-3 w-3" />
+                            全局
+                          </Badge>
+                        )}
+                        {renderHealthBadge(proxy)}
+                        {!proxy.enabled && (
+                          <Badge variant="outline" className="text-xs text-muted-foreground">
+                            {proxy.autoDisabled ? '自动禁用' : '已禁用'}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3 mt-0.5">
+                        {proxy.credentialCount > 0 && (
+                          <span className="text-xs text-muted-foreground">
+                            {proxy.credentialCount} 个凭据使用中
+                          </span>
+                        )}
+                        {proxy.lastCheckedAt && (
+                          <span className="text-xs text-muted-foreground">
+                            检测于 {new Date(proxy.lastCheckedAt).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-7 text-xs"
-                      onClick={() => checkMutation.mutate(proxy.id)}
-                      disabled={checkingId === proxy.id}
-                      title="测试此代理连通性"
-                    >
-                      <Activity className="h-3 w-3 mr-1" />
-                      {checkingId === proxy.id ? '测试中' : '测试'}
-                    </Button>
-                    {onSelectProxy && proxy.enabled && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7 text-xs"
-                        onClick={() => {
-                          onSelectProxy(proxy.url)
-                          onOpenChange(false)
-                        }}
+                    <div className="flex items-center gap-1 shrink-0">
+                      <label
+                        className="inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs"
+                        title={proxy.enabled || isGlobal ? '是否作为全局代理候选' : '启用代理后才能设为全局'}
                       >
-                        选用
-                      </Button>
-                    )}
-                    {proxy.enabled && !globalProxyCandidateSet.has(proxy.url) && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7 text-xs"
-                        onClick={() => setGlobalProxyMutation.mutate(proxy.url)}
-                        disabled={setGlobalProxyMutation.isPending}
-                        title="设为全局代理"
-                      >
-                        <Globe className="h-3 w-3 mr-1" />
+                        <Checkbox
+                          checked={isGlobal}
+                          onCheckedChange={(checked) => toggleProxyGlobal(proxy, checked === true)}
+                          disabled={setGlobalProxyMutation.isPending || (!proxy.enabled && !isGlobal)}
+                        />
                         全局
+                      </label>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs"
+                        onClick={() => handleCheckOne(proxy)}
+                        disabled={isChecking}
+                        title="测试此代理连通性"
+                      >
+                        <Activity className="h-3 w-3 mr-1" />
+                        {isChecking ? '测试中' : '测试'}
                       </Button>
-                    )}
-                    {globalProxyCandidateSet.has(proxy.url) && (
-                      <Badge variant="secondary" className="text-xs h-7">全局</Badge>
-                    )}
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 w-7 p-0"
-                      onClick={() => toggleMutation.mutate({ id: proxy.id, enabled: !proxy.enabled })}
-                      title={proxy.enabled ? '禁用此代理' : '启用此代理'}
-                    >
-                      {proxy.enabled ? (
-                        <ToggleRight className="h-4 w-4 text-green-500" />
-                      ) : (
-                        <ToggleLeft className="h-4 w-4 text-muted-foreground" />
+                      {onSelectProxy && proxy.enabled && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs"
+                          onClick={() => {
+                            onSelectProxy(proxy.url)
+                            onOpenChange(false)
+                          }}
+                        >
+                          选用
+                        </Button>
                       )}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 w-7 p-0 text-destructive hover:text-destructive"
-                      onClick={() => deleteMutation.mutate(proxy.id)}
-                      disabled={deleteMutation.isPending}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 w-7 p-0"
+                        onClick={() => handleSetProxyEnabled(proxy, !proxy.enabled)}
+                        title={proxy.enabled ? '禁用此代理' : '启用此代理'}
+                      >
+                        {proxy.enabled ? (
+                          <ToggleRight className="h-4 w-4 text-green-500" />
+                        ) : (
+                          <ToggleLeft className="h-4 w-4 text-muted-foreground" />
+                        )}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                        onClick={() => handleDeleteProxy(proxy)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         </div>
