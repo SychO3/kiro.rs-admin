@@ -41,7 +41,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { CredentialStatusItem, BalanceResponse } from "@/types/api";
-import { maskProxyUrl, extractErrorMessage, overageFailureMessage } from "@/lib/utils";
+import {
+  credentialDisplayName,
+  maskProxyUrl,
+  extractErrorMessage,
+  overageFailureMessage,
+} from "@/lib/utils";
 import {
   useSetDisabled,
   useSetPriority,
@@ -74,6 +79,8 @@ interface CredentialCardProps {
   view?: "card" | "list";
   /** 打开响应测试弹窗 */
   onTestResponse?: (id: number) => void;
+  /** 隐私模式：隐藏完整邮箱 */
+  privacyMode?: boolean;
 }
 
 function formatLastUsed(lastUsedAt: string | null): string {
@@ -208,6 +215,7 @@ export function CredentialCard({
   failureStats,
   view = "card",
   onTestResponse,
+  privacyMode = true,
 }: CredentialCardProps) {
   const [editingPriority, setEditingPriority] = useState(false);
   const [priorityValue, setPriorityValue] = useState(
@@ -228,6 +236,7 @@ export function CredentialCard({
   const resetSuccess = useResetSuccessCount();
   const clearThrottle = useClearThrottle();
   const queryClient = useQueryClient();
+  const displayName = credentialDisplayName(credential.email, credential.id, privacyMode);
 
   // 拖拽排序：手柄触发，整卡随拖动位移
   const {
@@ -603,7 +612,7 @@ export function CredentialCard({
       {/* 身份 + 徽章 */}
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium leading-5">
-          {credential.email || `凭据 #${credential.id}`}
+          {displayName}
         </div>
         <div className="mt-1 flex min-w-0 items-center gap-1 overflow-hidden [&>*]:shrink-0">
           {badges}
@@ -873,7 +882,7 @@ export function CredentialCard({
             </label>
             <div className="min-w-0 flex-1">
               <CardTitle className="truncate text-[15px] leading-5">
-                {credential.email || `凭据 #${credential.id}`}
+                {displayName}
               </CardTitle>
               <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1 overflow-hidden">
                 {badges}
@@ -1218,7 +1227,7 @@ export function CredentialCard({
         open={showFailuresDialog}
         onOpenChange={setShowFailuresDialog}
         credentialId={credential.id}
-        email={credential.email}
+        email={displayName}
       />
       <AvailableModelsDialog
         open={showModelsDialog}

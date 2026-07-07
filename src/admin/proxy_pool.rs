@@ -637,6 +637,30 @@ impl ProxyPoolManager {
         self.persist()?;
         Ok(entry)
     }
+
+    /// 临时探测任意代理 URL，不写入代理池、不影响启用状态。
+    pub async fn check_url(&self, url: &str) -> anyhow::Result<ProxyEntry> {
+        let url = url.trim();
+        if url.is_empty() {
+            anyhow::bail!("代理 URL 不能为空");
+        }
+        validate_proxy_url(url)?;
+
+        let result = self.probe_one(url).await;
+        let mut entry = ProxyEntry {
+            id: 0,
+            url: url.to_string(),
+            label: None,
+            enabled: true,
+            health: ProxyHealth::Unknown,
+            latency_ms: None,
+            last_checked_at: None,
+            consecutive_failures: 0,
+            auto_disabled: false,
+        };
+        Self::apply_probe_result(&mut entry, &result);
+        Ok(entry)
+    }
 }
 
 #[cfg(test)]

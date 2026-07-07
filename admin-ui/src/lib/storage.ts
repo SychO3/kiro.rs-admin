@@ -1,6 +1,7 @@
 const API_KEY_STORAGE_KEY = 'adminApiKey'
 const CREDENTIAL_VIEW_KEY = 'credentialView'
 const CREDENTIAL_PAGE_SIZE_KEY = 'credentialPageSize'
+const PRIVACY_MODE_KEY = 'privacyMode'
 
 export type CredentialView = 'card' | 'list'
 
@@ -27,4 +28,12 @@ export const storage = {
   },
   setCredentialPageSize: (size: number) =>
     localStorage.setItem(CREDENTIAL_PAGE_SIZE_KEY, String(size)),
+
+  // 隐私模式默认开启，沿用 Kiro-Go 的 localStorage key
+  getPrivacyMode: (): boolean => {
+    const raw = localStorage.getItem(PRIVACY_MODE_KEY)
+    return raw === null ? true : raw === 'true'
+  },
+  setPrivacyMode: (enabled: boolean) =>
+    localStorage.setItem(PRIVACY_MODE_KEY, String(enabled)),
 }

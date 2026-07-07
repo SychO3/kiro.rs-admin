@@ -31,11 +31,12 @@ use super::types::{
     CredentialsStatusResponse, EnableOverageAllResult, ExportedAccount, ExportedCredentials,
     GitHubRateLimitInfo, ImageUpdateResponse, LoadBalancingModeResponse,
     LogGovernanceConfigResponse, PollIdcLoginResponse, ProxyBalancingModeResponse,
-    ProxyCheckAllResponse, ProxyCheckResponse, ProxyPoolEntry, ProxyPoolResponse,
-    QuotaExceededResult, SetAccountThrottleConfigRequest, SetLoadBalancingModeRequest,
-    SetLogGovernanceConfigRequest, SetProxyBalancingModeRequest, SetUpdateConfigRequest,
-    StartIdcLoginRequest, StartIdcLoginResponse, StartSocialLoginRequest, StartSocialLoginResponse,
-    UpdateCheckInfo, UpdateConfigResponse, UpdateCredentialRequest, UpdateRefreshTokenRequest,
+    ProxyCheckAllResponse, ProxyCheckResponse, ProxyCheckUrlRequest, ProxyPoolEntry,
+    ProxyPoolResponse, QuotaExceededResult, SetAccountThrottleConfigRequest,
+    SetLoadBalancingModeRequest, SetLogGovernanceConfigRequest, SetProxyBalancingModeRequest,
+    SetUpdateConfigRequest, StartIdcLoginRequest, StartIdcLoginResponse, StartSocialLoginRequest,
+    StartSocialLoginResponse, UpdateCheckInfo, UpdateConfigResponse, UpdateCredentialRequest,
+    UpdateRefreshTokenRequest,
 };
 
 /// 余额缓存过期时间（秒），5 分钟
@@ -2483,6 +2484,26 @@ impl AdminService {
             .check_one(id)
             .await
             .map_err(|_| AdminServiceError::NotFound { id })?;
+        Ok(ProxyCheckResponse {
+            id: entry.id,
+            health: entry.health,
+            latency_ms: entry.latency_ms,
+            last_checked_at: entry.last_checked_at,
+            enabled: entry.enabled,
+            auto_disabled: entry.auto_disabled,
+        })
+    }
+
+    /// 临时探测代理 URL，不入池、不回写代理池状态。
+    pub async fn check_proxy_url(
+        &self,
+        req: ProxyCheckUrlRequest,
+    ) -> Result<ProxyCheckResponse, AdminServiceError> {
+        let entry = self
+            .proxy_pool
+            .check_url(&req.url)
+            .await
+            .map_err(|e| AdminServiceError::InvalidCredential(e.to_string()))?;
         Ok(ProxyCheckResponse {
             id: entry.id,
             health: entry.health,

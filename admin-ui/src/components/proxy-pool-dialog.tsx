@@ -36,12 +36,13 @@ import {
   setProxyBalancingMode,
   PROXY_BALANCING_LABEL,
   checkProxy,
+  checkProxyUrl,
   checkAllProxies,
   assignProxiesRoundRobin,
   type ProxyBalancingMode,
 } from '@/api/credentials'
 import { extractErrorMessage, maskProxyUrl } from '@/lib/utils'
-import type { ProxyPoolEntry } from '@/types/api'
+import type { ProxyCheckResponse, ProxyPoolEntry } from '@/types/api'
 
 interface ProxyPoolDialogProps {
   open: boolean
@@ -70,6 +71,8 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
   const [showBatch, setShowBatch] = useState(false)
   const [globalProxyText, setGlobalProxyText] = useState('')
   const [batchErrors, setBatchErrors] = useState<string[]>([])
+  const [checkingGlobalUrl, setCheckingGlobalUrl] = useState<string | null>(null)
+  const [globalCheckResults, setGlobalCheckResults] = useState<Record<string, ProxyCheckResponse>>({})
   const queryClient = useQueryClient()
 
   const { data, isLoading } = useQuery({
@@ -111,9 +114,9 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
   })
 
   const currentGlobalProxy = globalProxyData?.proxyUrl ?? null
-  const maskedGlobalProxyCandidates = currentGlobalProxy
-    ? splitProxyCandidates(currentGlobalProxy).map(maskProxyCandidate)
-    : []
+  const globalProxyCandidates = currentGlobalProxy ? splitProxyCandidates(currentGlobalProxy) : []
+  const globalProxyCandidateSet = new Set(globalProxyCandidates)
+  const proxyByUrl = new Map((data?.proxies ?? []).map((proxy) => [proxy.url, proxy]))
 
   const addMutation = useMutation({
     mutationFn: () => addProxy({ url: newUrl.trim(), label: newLabel.trim() || undefined }),
@@ -177,6 +180,21 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
     onSettled: () => setCheckingId(null),
   })
 
+  const checkGlobalUrlMutation = useMutation({
+    mutationFn: (url: string) => checkProxyUrl({ url }),
+    onMutate: (url) => setCheckingGlobalUrl(url),
+    onSuccess: (res, url) => {
+      setGlobalCheckResults((prev) => ({ ...prev, [url]: res }))
+      if (res.health === 'healthy') {
+        toast.success(`代理可用，延迟 ${res.latencyMs ?? '-'} ms`)
+      } else {
+        toast.error('代理探测失败')
+      }
+    },
+    onError: (err) => toast.error(`探测失败: ${extractErrorMessage(err)}`),
+    onSettled: () => setCheckingGlobalUrl(null),
+  })
+
   const checkAllMutation = useMutation({
     mutationFn: () => checkAllProxies(),
     onSuccess: (res) => {
@@ -204,6 +222,11 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
     addMutation.mutate()
   }
 
+  const deleteGlobalCandidate = (index: number) => {
+    const next = globalProxyCandidates.filter((_, i) => i !== index)
+    setGlobalProxyMutation.mutate(next.length > 0 ? next.join('\n') : null)
+  }
+
   const renderHealthBadge = (proxy: ProxyPoolEntry) => {
     if (proxy.health === 'healthy') {
       return (
@@ -225,6 +248,31 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
       <Badge variant="outline" className="text-xs gap-1 text-muted-foreground">
         <HelpCircle className="h-3 w-3" />
         未检测
+      </Badge>
+    )
+  }
+
+  const renderCheckResultBadge = (result?: ProxyCheckResponse) => {
+    if (!result) {
+      return (
+        <Badge variant="outline" className="text-xs gap-1 text-muted-foreground">
+          <HelpCircle className="h-3 w-3" />
+          未检测
+        </Badge>
+      )
+    }
+    if (result.health === 'healthy') {
+      return (
+        <Badge variant="outline" className="text-xs gap-1 border-green-500/50 text-green-600 dark:text-green-400">
+          <CheckCircle2 className="h-3 w-3" />
+          {result.latencyMs != null ? `${result.latencyMs}ms` : '可用'}
+        </Badge>
+      )
+    }
+    return (
+      <Badge variant="outline" className="text-xs gap-1 border-destructive/50 text-destructive">
+        <XCircle className="h-3 w-3" />
+        异常
       </Badge>
     )
   }
@@ -359,19 +407,69 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
                 </Button>
               )}
             </div>
-            <div className="text-xs font-mono text-muted-foreground">
-              {maskedGlobalProxyCandidates.length > 0 ? (
-                <div className="flex flex-wrap gap-1.5">
-                  {maskedGlobalProxyCandidates.map((proxy, index) => (
-                    <span key={`${proxy}-${index}`} className="rounded bg-secondary px-2 py-1">
-                      {proxy}
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                '未配置（直连）'
-              )}
-            </div>
+            {globalProxyCandidates.length > 0 ? (
+              <div className="rounded-md border divide-y">
+                {globalProxyCandidates.map((candidate, index) => {
+                  const poolEntry = proxyByUrl.get(candidate)
+                  const isDirect = candidate.toLowerCase() === 'direct'
+                  const checkingPool = poolEntry ? checkingId === poolEntry.id : false
+                  const checkingTemp = checkingGlobalUrl === candidate
+                  return (
+                    <div key={`${candidate}-${index}`} className="flex items-center gap-3 p-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-mono text-xs truncate">
+                            {maskProxyCandidate(candidate)}
+                          </span>
+                          {isDirect ? (
+                            <Badge variant="secondary" className="text-xs">直连兜底</Badge>
+                          ) : poolEntry ? (
+                            renderHealthBadge(poolEntry)
+                          ) : (
+                            renderCheckResultBadge(globalCheckResults[candidate])
+                          )}
+                          {poolEntry && !poolEntry.enabled && (
+                            <Badge variant="outline" className="text-xs text-muted-foreground">
+                              {poolEntry.autoDisabled ? '池内自动禁用' : '池内已禁用'}
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {!isDirect && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs"
+                            onClick={() => {
+                              if (poolEntry) checkMutation.mutate(poolEntry.id)
+                              else checkGlobalUrlMutation.mutate(candidate)
+                            }}
+                            disabled={checkingPool || checkingTemp}
+                            title="测试此代理连通性"
+                          >
+                            <Activity className="h-3 w-3 mr-1" />
+                            {checkingPool || checkingTemp ? '测试中' : '测试'}
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                          onClick={() => deleteGlobalCandidate(index)}
+                          disabled={setGlobalProxyMutation.isPending}
+                          title="从全局代理候选中删除"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="text-xs text-muted-foreground">未配置（直连）</div>
+            )}
             <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
               <Textarea
                 value={globalProxyText}
@@ -491,7 +589,7 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
                         选用
                       </Button>
                     )}
-                    {proxy.enabled && proxy.url !== currentGlobalProxy && (
+                    {proxy.enabled && !globalProxyCandidateSet.has(proxy.url) && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -504,7 +602,7 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
                         全局
                       </Button>
                     )}
-                    {proxy.url === currentGlobalProxy && (
+                    {globalProxyCandidateSet.has(proxy.url) && (
                       <Badge variant="secondary" className="text-xs h-7">全局</Badge>
                     )}
                     <Button

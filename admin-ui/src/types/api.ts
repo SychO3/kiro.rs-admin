@@ -207,6 +207,11 @@ export interface AddProxyRequest {
   label?: string
 }
 
+// 临时探测代理 URL 请求（不写入代理池）
+export interface ProxyCheckUrlRequest {
+  url: string
+}
+
 // 批量添加代理请求
 export interface BatchAddProxyRequest {
   urls: string[]

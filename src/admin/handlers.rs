@@ -23,11 +23,11 @@ use super::{
         BatchAddProxyRequest, BatchImportEvent, BatchImportRequest, BatchImportSummary,
         ClientKeyItem, ClientKeysResponse, CompleteSocialLoginRequest, CreateClientKeyRequest,
         CreateClientKeyResponse, CredentialResponseTestRequest, GlobalProxyResponse,
-        SetAccountThrottleConfigRequest, SetDisabledRequest, SetGlobalProxyRequest,
-        SetLoadBalancingModeRequest, SetLogGovernanceConfigRequest, SetPriorityRequest,
-        SetProxyBalancingModeRequest, SetUpdateConfigRequest, StartIdcLoginRequest,
-        StartSocialLoginRequest, SuccessResponse, UpdateAdminKeyRequest, UpdateClientKeyRequest,
-        UpdateCredentialRequest, UpdateRefreshTokenRequest,
+        ProxyCheckUrlRequest, SetAccountThrottleConfigRequest, SetDisabledRequest,
+        SetGlobalProxyRequest, SetLoadBalancingModeRequest, SetLogGovernanceConfigRequest,
+        SetPriorityRequest, SetProxyBalancingModeRequest, SetUpdateConfigRequest,
+        StartIdcLoginRequest, StartSocialLoginRequest, SuccessResponse, UpdateAdminKeyRequest,
+        UpdateClientKeyRequest, UpdateCredentialRequest, UpdateRefreshTokenRequest,
     },
     usage_stats::{Range, StatsGranularity, StatsQueryWindow},
 };
@@ -496,6 +496,18 @@ pub async fn check_proxy(
     Path(id): Path<u64>,
 ) -> impl IntoResponse {
     match state.service.check_proxy(id).await {
+        Ok(resp) => Json(resp).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// POST /api/admin/proxy-pool/check-url
+/// 临时探测代理 URL，不写入代理池。
+pub async fn check_proxy_url(
+    State(state): State<AdminState>,
+    Json(payload): Json<ProxyCheckUrlRequest>,
+) -> impl IntoResponse {
+    match state.service.check_proxy_url(payload).await {
         Ok(resp) => Json(resp).into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }

@@ -219,9 +219,16 @@ export function Dashboard({ onLogout, embedded = false }: DashboardProps) {
   const [pageSize, setPageSize] = useState<number>(() =>
     storage.getCredentialPageSize(),
   );
+  const [privacyMode, setPrivacyMode] = useState<boolean>(() =>
+    storage.getPrivacyMode(),
+  );
   const changeViewMode = (v: CredentialView) => {
     setViewMode(v);
     storage.setCredentialView(v);
+  };
+  const changePrivacyMode = (enabled: boolean) => {
+    setPrivacyMode(enabled);
+    storage.setPrivacyMode(enabled);
   };
   const changePageSize = (n: number) => {
     setPageSize(n);
@@ -1533,6 +1540,22 @@ export function Dashboard({ onLogout, embedded = false }: DashboardProps) {
                   <span className="hidden sm:inline">列表</span>
                 </button>
               </div>
+              <button
+                type="button"
+                onClick={() => changePrivacyMode(!privacyMode)}
+                aria-pressed={privacyMode}
+                title={privacyMode ? "关闭隐私模式，显示完整邮箱" : "开启隐私模式，隐藏完整邮箱"}
+                className={`inline-flex h-8 w-full items-center justify-center gap-1 rounded-full border border-border bg-card/60 px-3 text-sm backdrop-blur transition-colors hover:bg-accent sm:w-auto ${
+                  privacyMode ? "text-foreground" : "text-muted-foreground"
+                }`}
+              >
+                {privacyMode ? (
+                  <EyeOff className="h-3.5 w-3.5" />
+                ) : (
+                  <Eye className="h-3.5 w-3.5" />
+                )}
+                <span>隐私模式</span>
+              </button>
             </div>
 
             {/* 操作 — 右（移动端整宽两列网格，桌面端右对齐内联） */}
@@ -1843,6 +1866,7 @@ export function Dashboard({ onLogout, embedded = false }: DashboardProps) {
                       }
                       failureStats={failureStatsMap?.[String(credential.id)]}
                       onTestResponse={(id) => openResponseTest([id])}
+                      privacyMode={privacyMode}
                     />
                   ))}
                 </div>
@@ -2092,12 +2116,14 @@ export function Dashboard({ onLogout, embedded = false }: DashboardProps) {
         onDelete={handleDeleteVerifyResult}
         onDeleteFailed={handleDeleteFailedVerify}
         deleting={verifyDeleting}
+        privacyMode={privacyMode}
       />
       <CredentialResponseTestDialog
         open={responseTestOpen}
         onOpenChange={setResponseTestOpen}
         credentials={data?.credentials ?? []}
         initialIds={responseTestIds}
+        privacyMode={privacyMode}
       />
     </div>
   );

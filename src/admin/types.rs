@@ -648,6 +648,13 @@ pub struct AddProxyRequest {
     pub label: Option<String>,
 }
 
+/// 临时探测代理 URL 请求（不写入代理池）
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyCheckUrlRequest {
+    pub url: String,
+}
+
 /// 批量导入代理请求
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

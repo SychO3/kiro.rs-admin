@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { getCredentialModels, testCredentialResponse } from '@/api/credentials'
-import { extractErrorMessage } from '@/lib/utils'
+import { credentialDisplayName, extractErrorMessage } from '@/lib/utils'
 import type {
   AvailableModelItem,
   CredentialResponseTestResponse,
@@ -42,11 +42,12 @@ interface CredentialResponseTestDialogProps {
   onOpenChange: (open: boolean) => void
   credentials: CredentialStatusItem[]
   initialIds: number[]
+  privacyMode?: boolean
 }
 
-function labelForCredential(c?: CredentialStatusItem) {
+function labelForCredential(c: CredentialStatusItem | undefined, privacyMode: boolean) {
   if (!c) return ''
-  return c.email || `凭据 #${c.id}`
+  return credentialDisplayName(c.email, c.id, privacyMode)
 }
 
 function statusBadge(row: TestRow) {
@@ -82,12 +83,14 @@ export function CredentialResponseTestDialog({
   onOpenChange,
   credentials,
   initialIds,
+  privacyMode = true,
 }: CredentialResponseTestDialogProps) {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [model, setModel] = useState(DEFAULT_RESPONSE_TEST_MODEL)
   const [models, setModels] = useState<AvailableModelItem[]>([])
   const [loadingModels, setLoadingModels] = useState(false)
   const [testing, setTesting] = useState(false)
+  const [runIds, setRunIds] = useState<number[]>([])
   const [rows, setRows] = useState<Map<number, TestRow>>(new Map())
   const initializedKeyRef = useRef<string | null>(null)
 
@@ -113,6 +116,7 @@ export function CredentialResponseTestDialog({
     const next = initialIds.filter((id) => enabledCredentialIds.has(id))
     setSelectedIds(new Set(next.length > 0 ? next : enabledCredentials.slice(0, 1).map((c) => c.id)))
     setRows(new Map())
+    setRunIds([])
     setModels([])
     setModel(DEFAULT_RESPONSE_TEST_MODEL)
     initializedKeyRef.current = initKey
@@ -156,6 +160,7 @@ export function CredentialResponseTestDialog({
     }
     const targetModel = model.trim() || DEFAULT_RESPONSE_TEST_MODEL
     setTesting(true)
+    setRunIds(ids)
     setRows(new Map(ids.map((id) => [id, { id, status: 'pending' as TestStatus }])))
 
     let ok = 0
@@ -190,7 +195,9 @@ export function CredentialResponseTestDialog({
     else toast.warning(`响应测试完成：正常 ${ok}，异常 ${failed}`)
   }
 
-  const resultRows = Array.from(rows.values())
+  const resultRows = runIds.length > 0
+    ? runIds.map((id) => rows.get(id) ?? { id, status: 'pending' as TestStatus })
+    : Array.from(rows.values())
 
   return (
     <Dialog open={open} onOpenChange={(next) => !testing && onOpenChange(next)}>
@@ -254,7 +261,7 @@ export function CredentialResponseTestDialog({
                     />
                     <span className="shrink-0 font-medium">#{credential.id}</span>
                     <span className="min-w-0 truncate text-muted-foreground">
-                      {labelForCredential(credential)}
+                      {labelForCredential(credential, privacyMode)}
                     </span>
                   </label>
                 ))
@@ -272,7 +279,7 @@ export function CredentialResponseTestDialog({
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex min-w-0 items-center gap-2">
                         <span className="shrink-0 font-medium">#{row.id}</span>
-                        <span className="truncate text-muted-foreground">{labelForCredential(credential)}</span>
+                        <span className="truncate text-muted-foreground">{labelForCredential(credential, privacyMode)}</span>
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
                         {row.result?.httpStatus != null && (

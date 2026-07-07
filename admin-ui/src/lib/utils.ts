@@ -395,6 +395,30 @@ export function maskProxyUrl(url: string): string {
   return `${scheme}${mask(user)}:${mask(pass)}@${host}`
 }
 
+export function maskEmailAddress(email: string): string {
+  if (!email || !email.includes('@')) return email
+  const [local, domain] = email.split('@')
+  const maskedLocal = local.length <= 2 ? local : `${local.slice(0, 2)}***`
+  const parts = domain.split('.')
+  if (parts.length >= 2) {
+    const tld = parts[parts.length - 1]
+    const sld = parts[parts.length - 2]
+    const subs = parts.slice(0, -2)
+    const maskPart = (part: string) => part.length <= 2 ? part : `${part.slice(0, 2)}***`
+    return `${maskedLocal}@${[...subs.map(maskPart), maskPart(sld), tld].join('.')}`
+  }
+  return `${maskedLocal}@${domain}`
+}
+
+export function credentialDisplayName(
+  email: string | null | undefined,
+  id: number,
+  privacyMode: boolean,
+): string {
+  if (!email) return `凭据 #${id}`
+  return privacyMode ? maskEmailAddress(email) : email
+}
+
 /**
  * 计算字符串的 SHA-256 哈希（十六进制）
  *

@@ -18,10 +18,12 @@ use crate::http_client::{ProxyConfig, build_client};
 use crate::kiro::endpoint::{KiroEndpoint, RequestContext};
 use crate::kiro::machine_id;
 use crate::kiro::model::credentials::KiroCredentials;
+use crate::kiro::model::events::Event;
 use crate::kiro::model::requests::conversation::{
     ConversationState, CurrentMessage, UserInputMessage,
 };
 use crate::kiro::model::requests::kiro::KiroRequest;
+use crate::kiro::parser::decoder::EventStreamDecoder;
 use crate::kiro::token_manager::MultiTokenManager;
 use crate::model::config::TlsBackend;
 use parking_lot::Mutex;
@@ -108,6 +110,42 @@ pub struct CredentialTestResult {
 struct ProxyAttemptResult {
     response: reqwest::Response,
     proxy: Option<ProxyConfig>,
+}
+
+fn readable_response_snippet_from_bytes(body: &[u8]) -> Option<String> {
+    let mut decoder = EventStreamDecoder::new();
+    if decoder.feed(body).is_ok() {
+        let mut text = String::new();
+        let mut errors = Vec::new();
+
+        for result in decoder.decode_iter() {
+            let Ok(frame) = result else {
+                continue;
+            };
+            match Event::from_frame(frame) {
+                Ok(Event::AssistantResponse(resp)) => text.push_str(&resp.content),
+                Ok(Event::Error {
+                    error_code,
+                    error_message,
+                }) => errors.push(format!("{}: {}", error_code, error_message)),
+                Ok(Event::Exception {
+                    exception_type,
+                    message,
+                }) => errors.push(format!("{}: {}", exception_type, message)),
+                _ => {}
+            }
+        }
+
+        if !text.trim().is_empty() {
+            return truncate_snippet(&text);
+        }
+        if !errors.is_empty() {
+            return truncate_snippet(&errors.join("\n"));
+        }
+    }
+
+    let fallback = String::from_utf8_lossy(body);
+    truncate_snippet(&fallback)
 }
 
 fn should_try_next_proxy(status: reqwest::StatusCode) -> bool {
@@ -626,7 +664,7 @@ impl KiroProvider {
         };
 
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body = response.bytes().await.unwrap_or_default();
         let success = status.is_success();
         if success {
             self.token_manager.report_success(ctx.id);
@@ -638,7 +676,7 @@ impl KiroProvider {
             success,
             latency_ms: started.elapsed().as_millis() as u64,
             http_status: Some(status.as_u16()),
-            response_snippet: truncate_snippet(&body),
+            response_snippet: readable_response_snippet_from_bytes(&body),
             error: if success {
                 None
             } else {
@@ -1452,5 +1490,69 @@ impl KiroProvider {
         let jitter_max = (backoff / 4).max(1);
         let jitter = fastrand::u64(0..=jitter_max);
         Duration::from_millis(backoff.saturating_add(jitter))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kiro::parser::crc::crc32;
+
+    fn string_header(name: &str, value: &str) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.push(name.len() as u8);
+        out.extend_from_slice(name.as_bytes());
+        out.push(7);
+        out.extend_from_slice(&(value.len() as u16).to_be_bytes());
+        out.extend_from_slice(value.as_bytes());
+        out
+    }
+
+    fn event_stream_frame(event_type: &str, payload: &str) -> Vec<u8> {
+        let mut headers = Vec::new();
+        headers.extend(string_header(":event-type", event_type));
+        headers.extend(string_header(":content-type", "application/json"));
+        headers.extend(string_header(":message-type", "event"));
+
+        let total_len = 12 + headers.len() + payload.len() + 4;
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&(total_len as u32).to_be_bytes());
+        frame.extend_from_slice(&(headers.len() as u32).to_be_bytes());
+        frame.extend_from_slice(&crc32(&frame).to_be_bytes());
+        frame.extend(headers);
+        frame.extend_from_slice(payload.as_bytes());
+        let checksum = crc32(&frame);
+        frame.extend_from_slice(&checksum.to_be_bytes());
+        frame
+    }
+
+    #[test]
+    fn readable_response_snippet_decodes_event_stream_assistant_text() {
+        let mut body = Vec::new();
+        body.extend(event_stream_frame(
+            "assistantResponseEvent",
+            r#"{"content":"Hello ","modelId":"glm-5"}"#,
+        ));
+        body.extend(event_stream_frame(
+            "assistantResponseEvent",
+            r#"{"content":"world","modelId":"glm-5"}"#,
+        ));
+        body.extend(event_stream_frame(
+            "meteringEvent",
+            r#"{"unit":"credit","usage":0.1}"#,
+        ));
+
+        assert_eq!(
+            readable_response_snippet_from_bytes(&body).as_deref(),
+            Some("Hello world")
+        );
+    }
+
+    #[test]
+    fn readable_response_snippet_falls_back_to_plain_text() {
+        assert_eq!(
+            readable_response_snippet_from_bytes(b"{\"message\":\"bad request\"}").as_deref(),
+            Some("{\"message\":\"bad request\"}")
+        );
     }
 }

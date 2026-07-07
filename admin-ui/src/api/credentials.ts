@@ -16,6 +16,7 @@ import type {
   ProxyPoolEntry,
   ProxyPoolResponse,
   AddProxyRequest,
+  ProxyCheckUrlRequest,
   BatchAddProxyRequest,
   BatchAddProxyResponse,
   AssignProxyRequest,
@@ -409,6 +410,12 @@ export async function assignProxyToCredential(
 // 即时探测单个代理连通性
 export async function checkProxy(id: number): Promise<ProxyCheckResponse> {
   const { data } = await api.post<ProxyCheckResponse>(`/proxy-pool/${id}/check`)
+  return data
+}
+
+// 临时探测代理 URL，不写入代理池
+export async function checkProxyUrl(req: ProxyCheckUrlRequest): Promise<ProxyCheckResponse> {
+  const { data } = await api.post<ProxyCheckResponse>('/proxy-pool/check-url', req)
   return data
 }
 
