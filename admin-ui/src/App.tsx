@@ -173,7 +173,7 @@ function LoggedOutApp({ onLogin }: { onLogin: () => void }) {
   return (
     <>
       <LoginPage onLogin={onLogin} />
-      <Toaster position="top-center" />
+      <Toaster position="bottom-center" />
     </>
   );
 }
@@ -195,7 +195,7 @@ function LoggedInApp({
         onToggleDarkMode={onToggleDarkMode}
       />
       <AppMain tab={tab} onLogout={onLogout} />
-      <Toaster position="top-center" />
+      <Toaster position="bottom-center" />
     </ConfirmProvider>
   );
 }
