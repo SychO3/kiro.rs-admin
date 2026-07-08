@@ -1029,6 +1029,13 @@ impl KiroProvider {
 
             // 成功响应
             if status.is_success() {
+                tracing::info!(
+                    "API 请求成功：凭据 #{} 端点 [{}]（尝试 {}/{}）",
+                    ctx.id,
+                    endpoint_name,
+                    attempt + 1,
+                    max_retries
+                );
                 Self::emit_attempt(
                     sink,
                     attempt,
@@ -1158,22 +1165,59 @@ impl KiroProvider {
                 continue;
             }
 
-            // 429 处理顺序：
-            // - 任何 429：先用同一张凭据切到 runtime.kiro.dev / q.amazonaws.com 备用端点桶。
-            // - 备用端点成功：直接返回，吃到两套独立限流桶的并发收益。
-            // - 备用端点仍失败：账号级风控才冷却当前凭据；普通限流再按 retry policy
-            //   切换其它凭据或退避。
-            // 这里仍先发射主端点 trace，保证链路顺序与真实调用一致。
-            if status.as_u16() == 429 {
-                // 下方「账号级风控」「瞬态重试」两个分支不再重复发射本跳，仅保留控制流。
-                let account_throttled = self.token_manager.get_account_throttle_failover()
+            // 客户端请求格式错误（messages 数组违反协议）：根因在调用方，重试无意义。
+            // 上游常以 5xx 返回，必须在下方「多端点降级链」「瞬态重试」之前拦截，否则会被
+            // 当作上游故障在多个端点/多次重试里放大成 503 风暴。直接终止，不重试、不换端点、
+            // 不切换凭据、不计入凭据失败。
+            if endpoint.is_client_validation_error(&body) {
+                tracing::warn!(
+                    "API 请求失败（客户端请求格式错误，不重试）: {} {}",
+                    status,
+                    body
+                );
+                Self::emit_attempt(
+                    sink, attempt, ctx.id, endpoint_name, Some(status.as_u16()),
+                    outcome::BAD_REQUEST, Some(&body), attempt_start,
+                );
+                anyhow::bail!("{} API 请求失败: {} {}", api_type, status, body);
+            }
+
+            // 524 / gateway timeout：上游边缘层超时，继续在本次请求内重试（含换端点）通常只会
+            // 放大客户端等待时间和 Claude 端 Retrying 轮数；快速返回，让客户端下一次调用重新建连。
+            // 同样必须在多端点降级链之前拦截。
+            if status.as_u16() == 524 || endpoint.is_gateway_timeout(&body) {
+                tracing::warn!(
+                    "API 请求失败（上游网关超时，不重试）: {} {}",
+                    status,
+                    body
+                );
+                Self::emit_attempt(
+                    sink, attempt, ctx.id, endpoint_name, Some(status.as_u16()),
+                    outcome::TRANSIENT, Some(&body), attempt_start,
+                );
+                anyhow::bail!("{} API 请求失败: {} {}", api_type, status, body);
+            }
+
+            // 多端点降级链（换桶不换号）：q / runtime.kiro.dev / codewhisperer 等是相互独立
+            // 的限流桶，一个不可用时另一个仍可 200。对齐 demo 的多端点重试——在 429/408/5xx
+            // 等「换端点可能有用」的瞬态错误上，用**同一张凭据**沿 fallback_chain() 依次重发。
+            //
+            // 关键：本块必须在下方「账号级风控」「瞬态重试」两个分支**之前**执行。
+            // 否则含 "suspicious activity" 的账号级 429 会被风控分支先行拦截、冷却当前凭据并
+            // 换号重试——始终停留在同一端点，永远轮不到备用桶，表现为「主端点连续重试几次才切」。
+            // 前置后：任何可换端点的错误都先用同一张凭据沿链重发（不计 attempt、不退避、不切凭据）。
+            // - 链中某桶成功 → 直接返回（trace 记为该桶 success，可见完整降级链路）。
+            // - 整条链都失败 → 落回下方按原始（主端点）响应体分类：账号级风控走冷却换号，
+            //   普通瞬态走退避重试；下一轮迭代再以主端点起手，形成桶间来回。
+            if matches!(status.as_u16(), 408 | 429) || status.is_server_error() {
+                // 先对主端点这一跳分类并**立即**发射 trace——必须在备用桶降级之前发射，保证链路里
+                // 主端点行排在备用桶行之前，顺序与真实调用一致。下方「账号级风控」「瞬态重试」两个
+                // 分支因此不再重复发射本跳，仅保留控制流。
+                let account_throttled = status.as_u16() == 429
+                    && self.token_manager.get_account_throttle_failover()
                     && endpoint.is_account_throttled(&body);
                 Self::emit_attempt(
-                    sink,
-                    attempt,
-                    ctx.id,
-                    endpoint_name,
-                    Some(429),
+                    sink, attempt, ctx.id, endpoint_name, Some(status.as_u16()),
                     if account_throttled {
                         outcome::ACCOUNT_THROTTLED
                     } else {
@@ -1183,93 +1227,79 @@ impl KiroProvider {
                     attempt_start,
                 );
 
-                if let Some(fb_name) = endpoint.fallback_endpoint() {
-                    if let Some(fb_endpoint) = self.endpoints.get(fb_name).cloned() {
-                        tracing::info!(
-                            "端点 [{}] 限流 429，凭据 #{} 降级到备用端点 [{}] 重试（换桶不换号）",
-                            endpoint_name,
-                            ctx.id,
-                            fb_name
-                        );
-                        let fb_start = Instant::now();
-                        match self
-                            .execute_api_request(
-                                &fb_endpoint,
-                                &ctx,
-                                &machine_id,
-                                config,
-                                request_body,
-                                selected_proxy.clone(),
-                            )
-                            .await
-                        {
-                            Ok(fb_resp) if fb_resp.status().is_success() => {
-                                let fb_status = fb_resp.status();
-                                Self::emit_attempt(
-                                    sink,
-                                    attempt,
-                                    ctx.id,
-                                    fb_name,
-                                    Some(fb_status.as_u16()),
-                                    outcome::SUCCESS,
-                                    None,
-                                    fb_start,
-                                );
-                                self.token_manager.report_success(ctx.id);
-                                tracing::info!(
-                                    "凭据 #{} 在备用端点 [{}] 成功（主端点 [{}] 此前 429）",
-                                    ctx.id,
-                                    fb_name,
-                                    endpoint_name
-                                );
-                                return Ok(KiroCallResult {
-                                    response: fb_resp,
-                                    credential_id: ctx.id,
-                                });
-                            }
-                            Ok(fb_resp) => {
-                                let fb_status = fb_resp.status();
-                                let fb_body = fb_resp.text().await.unwrap_or_default();
-                                Self::emit_attempt(
-                                    sink,
-                                    attempt,
-                                    ctx.id,
-                                    fb_name,
-                                    Some(fb_status.as_u16()),
-                                    outcome::TRANSIENT,
-                                    Some(&fb_body),
-                                    fb_start,
-                                );
-                                tracing::warn!(
-                                    "备用端点 [{}] 也失败（{}），落回主端点 429 分类处理",
-                                    fb_name,
-                                    fb_status
-                                );
-                            }
-                            Err(e) => {
-                                Self::emit_attempt(
-                                    sink,
-                                    attempt,
-                                    ctx.id,
-                                    fb_name,
-                                    None,
-                                    outcome::NETWORK_ERROR,
-                                    Some(&e.to_string()),
-                                    fb_start,
-                                );
-                                tracing::warn!(
-                                    "备用端点 [{}] 请求发送失败（{}），落回主端点 429 分类处理",
-                                    fb_name,
-                                    e
-                                );
-                            }
+                // 沿降级链依次尝试每个备用桶（换桶不换号），命中第一个 2xx 即返回；
+                // 整条链都失败才落回下方的账号风控/瞬态重试逻辑。参考 demo 的多端点重试。
+                for fb_name in endpoint.fallback_chain() {
+                    let Some(fb_endpoint) = self.endpoints.get(*fb_name).cloned() else {
+                        continue;
+                    };
+                    tracing::info!(
+                        "端点 [{}] 返回 {}（瞬态），凭据 #{} 降级到备用端点 [{}] 重试（换桶不换号）",
+                        endpoint_name,
+                        status.as_u16(),
+                        ctx.id,
+                        fb_name
+                    );
+                    let fb_start = Instant::now();
+                    match self
+                        .execute_api_request(
+                            &fb_endpoint,
+                            &ctx,
+                            &machine_id,
+                            config,
+                            request_body,
+                            selected_proxy.clone(),
+                        )
+                        .await
+                    {
+                        Ok(fb_resp) if fb_resp.status().is_success() => {
+                            let fb_status = fb_resp.status();
+                            Self::emit_attempt(
+                                sink, attempt, ctx.id, fb_name, Some(fb_status.as_u16()),
+                                outcome::SUCCESS, None, fb_start,
+                            );
+                            self.token_manager.report_success(ctx.id);
+                            tracing::info!(
+                                "凭据 #{} 在备用端点 [{}] 成功（主端点 [{}] 此前 429）",
+                                ctx.id,
+                                fb_name,
+                                endpoint_name
+                            );
+                            return Ok(KiroCallResult {
+                                response: fb_resp,
+                                credential_id: ctx.id,
+                            });
+                        }
+                        Ok(fb_resp) => {
+                            let fb_status = fb_resp.status();
+                            let fb_body = fb_resp.text().await.unwrap_or_default();
+                            Self::emit_attempt(
+                                sink, attempt, ctx.id, fb_name, Some(fb_status.as_u16()),
+                                outcome::TRANSIENT, Some(&fb_body), fb_start,
+                            );
+                            tracing::warn!(
+                                "备用端点 [{}] 也失败（{}），尝试链中下一个桶",
+                                fb_name,
+                                fb_status
+                            );
+                        }
+                        Err(e) => {
+                            Self::emit_attempt(
+                                sink, attempt, ctx.id, fb_name, None,
+                                outcome::NETWORK_ERROR, Some(&e.to_string()), fb_start,
+                            );
+                            tracing::warn!(
+                                "备用端点 [{}] 请求发送失败（{}），尝试链中下一个桶",
+                                fb_name,
+                                e
+                            );
                         }
                     }
                 }
-
+                // 整条降级链都失败，落回主端点 429 分类处理。
                 let switch_on_ordinary_429 =
                     retry_mode == RetryMode::Failover || retry_policy.credential_switch_on_429;
-                if !account_throttled && switch_on_ordinary_429 {
+                if status.as_u16() == 429 && !account_throttled && switch_on_ordinary_429 {
                     request_throttled_ids.insert(ctx.id);
                     if self.token_manager.has_available_excluding(
                         model.as_deref(),
@@ -1361,51 +1391,23 @@ impl KiroProvider {
                 continue;
             }
 
-            // 客户端请求格式错误（messages 数组违反协议）：根因在调用方，重试无意义
-            // 上游常以 5xx 返回，必须在下方"瞬态错误重试"分支之前拦截，否则会被当作
-            // 上游故障重试 max_retries 次，把一个坏请求放大成多次 503（503 风暴）。
-            // 直接终止：不重试、不切换凭据、不计入凭据失败。
-            if endpoint.is_client_validation_error(&body) {
+            // 429 + suspicious activity，但账号级风控转移**已关闭**：打日志说明，让开关效果可见。
+            // 不冷却、不换号，按普通瞬态 429 落入下方退避重试。
+            if status.as_u16() == 429
+                && !self.token_manager.get_account_throttle_failover()
+                && endpoint.is_account_throttled(&body)
+            {
                 tracing::warn!(
-                    "API 请求失败（客户端请求格式错误，不重试）: {} {}",
-                    status,
-                    body
+                    "检测到账号级风控（suspicious activity，凭据 #{}），但账号风控转移已关闭 \
+                     (account_throttle_failover=false)，按普通 429 退避重试（不冷却、不换号）",
+                    ctx.id
                 );
-                Self::emit_attempt(
-                    sink,
-                    attempt,
-                    ctx.id,
-                    endpoint_name,
-                    Some(status.as_u16()),
-                    outcome::BAD_REQUEST,
-                    Some(&body),
-                    attempt_start,
-                );
-                anyhow::bail!("{} API 请求失败: {} {}", api_type, status, body);
-            }
-
-            // 524 / gateway timeout：上游边缘层超时，继续在本次请求内重试通常只会
-            // 放大客户端等待时间和 Claude 端 Retrying 轮数；快速返回，让客户端下一次调用
-            // 重新建连。
-            if status.as_u16() == 524 || endpoint.is_gateway_timeout(&body) {
-                tracing::warn!("API 请求失败（上游网关超时，不重试）: {} {}", status, body);
-                Self::emit_attempt(
-                    sink,
-                    attempt,
-                    ctx.id,
-                    endpoint_name,
-                    Some(status.as_u16()),
-                    outcome::TRANSIENT,
-                    Some(&body),
-                    attempt_start,
-                );
-                anyhow::bail!("{} API 请求失败: {} {}", api_type, status, body);
             }
 
             // 429/408/5xx - 瞬态上游错误：重试但不禁用或切换凭据
             // （避免 429 high traffic / 502 high load 等瞬态错误把所有凭据锁死）
-            // 注：429 的备用端点降级已在上方「账号级风控」分支之前统一处理过；
-            // 走到这里说明主端点 429 且备用端点也失败，按瞬态错误退避重试。
+            // 注：这些状态的多端点降级已在上方「账号级风控」分支之前沿链统一处理过；
+            // 走到这里说明主端点失败且整条降级链也失败，按瞬态错误退避重试。
             if matches!(status.as_u16(), 408 | 429) || status.is_server_error() {
                 tracing::warn!(
                     "API 请求失败（上游瞬态错误，尝试 {}/{}）: {} {}",
@@ -1414,19 +1416,8 @@ impl KiroProvider {
                     status,
                     body
                 );
-                // 429 本跳 trace 已在上方降级块统一发射，此处仅对 408/5xx 发射，避免重复行。
-                if status.as_u16() != 429 {
-                    Self::emit_attempt(
-                        sink,
-                        attempt,
-                        ctx.id,
-                        endpoint_name,
-                        Some(status.as_u16()),
-                        outcome::TRANSIENT,
-                        Some(&body),
-                        attempt_start,
-                    );
-                }
+                // 本跳 trace 已在上方多端点降级块（408|429|5xx 全部覆盖）统一发射，此处不再重发，
+                // 避免重复行。
                 last_error = Some(anyhow::anyhow!(
                     "{} API 请求失败: {} {}",
                     api_type,
