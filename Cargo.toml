@@ -12,6 +12,14 @@ lto = "thin"
 codegen-units = 16
 strip = true
 
+[profile.docker]
+inherits = "release"
+lto = false
+codegen-units = 256
+opt-level = 2
+strip = true
+incremental = true
+
 [dependencies]
 axum = "0.8"
 tokio = { version = "1.0", features = ["full"] }
