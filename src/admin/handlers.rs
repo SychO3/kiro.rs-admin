@@ -217,13 +217,35 @@ pub async fn get_credential_balance(
 }
 
 /// GET /api/admin/credentials/:id/models
-/// 获取指定凭据当前可用的模型列表（按需实时查询上游）
+/// 获取指定凭据当前可用的模型列表（按需实时查询上游），同时同步到全局模型缓存
 pub async fn get_credential_models(
     State(state): State<AdminState>,
     Path(id): Path<u64>,
 ) -> impl IntoResponse {
     match state.service.get_available_models(id).await {
-        Ok(response) => Json(response).into_response(),
+        Ok(response) => {
+            // 同步到全局 /v1/models 缓存（过滤 auto）
+            let models: Vec<crate::anthropic::types::Model> = response
+                .models
+                .iter()
+                .filter(|m| m.model_id != "auto")
+                .map(|m| {
+                    let owned_by = infer_owned_by(&m.model_id);
+                    crate::anthropic::types::Model {
+                        id: m.model_id.clone(),
+                        object: "model".to_string(),
+                        created: 1781481600,
+                        owned_by,
+                        display_name: m.model_name.clone().unwrap_or_default(),
+                        model_type: "chat".to_string(),
+                        max_tokens: 64000,
+                    }
+                })
+                .collect();
+            *state.models_cache.write().await = models;
+
+            Json(response).into_response()
+        }
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
 }
