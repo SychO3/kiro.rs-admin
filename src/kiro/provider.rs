@@ -1135,6 +1135,27 @@ impl KiroProvider {
 
             // 400 Bad Request - 请求问题，重试/切换凭据无意义
             if status.as_u16() == 400 {
+                // INVALID_MODEL_ID：当前出口 IP 不支持该模型（如 opus），
+                // 标记当前代理失败，故障转移到下一个代理重试。
+                if body.contains("INVALID_MODEL_ID") {
+                    tracing::warn!(
+                        "凭据 #{} 当前代理返回 INVALID_MODEL_ID，标记代理失败并重试",
+                        ctx.id
+                    );
+                    self.report_proxy_failure(ctx.id, selected_proxy.as_ref());
+                    Self::emit_attempt(
+                        sink,
+                        attempt,
+                        ctx.id,
+                        endpoint_name,
+                        Some(400),
+                        "invalid_model_proxy",
+                        Some(&body),
+                        attempt_start,
+                    );
+                    last_error = Some(anyhow::anyhow!("INVALID_MODEL_ID"));
+                    continue;
+                }
                 Self::emit_attempt(
                     sink,
                     attempt,
