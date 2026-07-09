@@ -590,6 +590,7 @@ function ModelTable({ data }: { data: ModelDistribution[] }) {
             <th className="text-right font-medium">调用</th>
             <th className="text-right font-medium">输入</th>
             <th className="text-right font-medium">输出</th>
+            <th className="text-right font-medium">费用</th>
           </tr>
         </thead>
         <tbody>
@@ -599,6 +600,7 @@ function ModelTable({ data }: { data: ModelDistribution[] }) {
               <td className="text-right tabular-nums">{formatNumber(m.calls)}</td>
               <td className="text-right tabular-nums">{formatNumber(m.inputTokens)}</td>
               <td className="text-right tabular-nums">{formatNumber(m.outputTokens)}</td>
+              <td className="text-right tabular-nums text-amber-600 dark:text-amber-400">{formatCost(m.cost)}</td>
             </tr>
           ))}
         </tbody>

@@ -2,7 +2,7 @@ import { memo, useMemo } from 'react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 import type { CredentialDistribution } from '@/types/api'
 import { tooltipContentStyle, tooltipCursorStyle, tooltipItemStyle, tooltipLabelStyle } from './tooltip-style'
-import { formatNumber } from '@/lib/utils'
+import { formatCost, formatNumber } from '@/lib/utils'
 
 interface Props {
   data: CredentialDistribution[]
@@ -15,6 +15,7 @@ interface ChartDatum {
   inputTokens: number
   label: string
   outputTokens: number
+  cost: number
 }
 
 function CredentialBarChartImpl({ data }: Props) {
@@ -37,6 +38,7 @@ function buildChartData(data: CredentialDistribution[]): ChartDatum[] {
       inputTokens: d.inputTokens,
       label: d.email ? truncateEmail(d.email) : fullLabel,
       outputTokens: d.outputTokens,
+      cost: d.cost ?? 0,
     }
   })
 }
@@ -94,7 +96,10 @@ function credentialChartTooltip() {
 }
 
 function formatTooltipLabel(label: string, payload?: ReadonlyArray<{ payload?: ChartDatum }>) {
-  return payload?.[0]?.payload?.fullLabel ?? label
+  const datum = payload?.[0]?.payload
+  const name = datum?.fullLabel ?? label
+  const cost = datum?.cost ?? 0
+  return cost > 0 ? `${name}  ${formatCost(cost)}` : name
 }
 
 function credentialChartBars() {

@@ -320,6 +320,7 @@ pub struct ModelDistribution {
     pub calls: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    pub cost: f64,
 }
 
 /// 上游凭据分布
@@ -331,6 +332,7 @@ pub struct CredentialDistribution {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub errors: u64,
+    pub cost: f64,
 }
 
 /// 概览：今日 + 累计
@@ -504,6 +506,7 @@ impl UsageAggregator {
                 entry.input_tokens += stats.input_tokens;
                 entry.output_tokens += stats.output_tokens;
                 entry.calls += stats.calls;
+                entry.cost += stats.cost;
             }
         }
         let mut out: Vec<ModelDistribution> = acc
@@ -513,6 +516,7 @@ impl UsageAggregator {
                 calls: stats.calls,
                 input_tokens: stats.input_tokens,
                 output_tokens: stats.output_tokens,
+                cost: stats.cost,
             })
             .collect();
         out.sort_by(|a, b| b.calls.cmp(&a.calls));
@@ -544,6 +548,7 @@ impl UsageAggregator {
                 entry.output_tokens += stats.output_tokens;
                 entry.calls += stats.calls;
                 entry.errors += stats.errors;
+                entry.cost += stats.cost;
             }
         }
         let mut out: Vec<CredentialDistribution> = acc
@@ -554,6 +559,7 @@ impl UsageAggregator {
                 input_tokens: stats.input_tokens,
                 output_tokens: stats.output_tokens,
                 errors: stats.errors,
+                cost: stats.cost,
             })
             .collect();
         out.sort_by(|a, b| b.calls.cmp(&a.calls));

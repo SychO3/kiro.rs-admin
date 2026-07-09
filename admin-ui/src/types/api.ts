@@ -490,6 +490,7 @@ export interface ModelDistribution {
   calls: number
   inputTokens: number
   outputTokens: number
+  cost: number
 }
 
 export interface CredentialDistribution {
@@ -499,6 +500,7 @@ export interface CredentialDistribution {
   inputTokens: number
   outputTokens: number
   errors: number
+  cost: number
 }
 
 // ============ 请求链路追踪 ============
