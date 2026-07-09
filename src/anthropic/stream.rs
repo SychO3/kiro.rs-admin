@@ -915,6 +915,12 @@ pub enum ToolJsonAccumulatorError {
 }
 
 impl ToolJsonAccumulatorError {
+    /// 是否为上游截断（半截 JSON），区别于真正的解析错误。
+    /// 截断可容错（丢弃不完整工具调用，保留文本），解析错误不可容错。
+    pub fn is_incomplete(&self) -> bool {
+        matches!(self, Self::IncompleteJson { .. })
+    }
+
     /// Anthropic error 事件里统一的 error.type。
     pub fn error_type(&self) -> &'static str {
         "upstream_tool_json_error"
@@ -2454,9 +2460,17 @@ impl StreamContext {
         if self.tool_json_error.is_none()
             && let Err(e) = self.tool_json_accumulator.finish()
         {
-            tracing::error!("{}", e);
-            self.tool_json_error = Some(e);
-            self.state_manager.set_stop_reason("error");
+            if e.is_incomplete() {
+                // 上游截断（半截 JSON）：容错处理，丢弃不完整的 tool_use，
+                // 保留已发送的文本内容，stop_reason 设为 end_turn。
+                tracing::warn!("上游截断 tool_use JSON，已容错丢弃: {}", e);
+                self.state_manager.set_stop_reason("end_turn");
+            } else {
+                // 真正的 JSON 解析错误：保持原有 error 处理
+                tracing::error!("{}", e);
+                self.tool_json_error = Some(e);
+                self.state_manager.set_stop_reason("error");
+            }
         }
 
         // 互斥口径：total 真值（contextUsage 优先）− 缓存覆盖 = 未缓存的 input。

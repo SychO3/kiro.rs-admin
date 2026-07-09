@@ -43,8 +43,8 @@ RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=builder /app/kiro-rs /app/kiro-rs
 
-VOLUME ["/app/config"]
+VOLUME ["/app/data"]
 
 EXPOSE 8990
 
-CMD ["./kiro-rs", "-c", "/app/config/config.json", "--credentials", "/app/config/credentials.json"]
+CMD ["./kiro-rs", "-c", "/app/data/config.json", "--credentials", "/app/data/credentials.json"]

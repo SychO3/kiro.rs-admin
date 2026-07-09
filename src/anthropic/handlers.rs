@@ -1291,12 +1291,19 @@ async fn handle_non_stream_request(
     if tool_json_error.is_none()
         && let Err(e) = tool_accumulator.finish()
     {
-        tracing::error!("{}", e);
-        tool_json_error = Some(e);
+        if e.is_incomplete() {
+            // 上游截断（半截 JSON）：容错处理，丢弃不完整的 tool_use，
+            // 保留已收到的文本内容，当作 end_turn 返回。
+            tracing::warn!("上游截断 tool_use JSON，已容错丢弃: {}", e);
+            has_tool_use = false;
+            stop_reason = "end_turn".to_string();
+        } else {
+            tracing::error!("{}", e);
+            tool_json_error = Some(e);
+        }
     }
 
-    // 工具调用 JSON 半截 / 非法：非流式路径尚未发送任何字节，直接回 502，
-    // 明确暴露上游问题，而不是把无法解析的参数当成完整调用返回。
+    // 工具调用 JSON 非法（解析失败，非截断）：非流式路径尚未发送任何字节，直接回 502。
     if let Some(err) = tool_json_error {
         let message = err.message();
         hook.record(credential_id, input_tokens, 0, 0, 0, 0.0, "error");
