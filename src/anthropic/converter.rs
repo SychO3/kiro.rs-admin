@@ -356,6 +356,25 @@ pub fn normalize_model_id(model: &str) -> String {
     map_model(model).unwrap_or_else(|| strip_thinking_suffix(model.trim()).to_string())
 }
 
+/// 将模型 ID 统一为官方横杠格式（用于存储和显示）
+/// claude-opus-4.8 → claude-opus-4-8
+pub fn canonicalize_model_id(model: &str) -> String {
+    let trimmed = model.trim();
+    // 匹配 claude-{family}-{major}.{minor} 模式，转为横杠
+    let s = trimmed.to_string();
+    if s.starts_with("claude-") {
+        // claude-opus-4.8 → claude-opus-4-8
+        // claude-sonnet-4.6 → claude-sonnet-4-6
+        // claude-haiku-4.5-20251001 → claude-haiku-4-5-20251001
+        s.replacen("4.8", "4-8", 1)
+            .replacen("4.7", "4-7", 1)
+            .replacen("4.6", "4-6", 1)
+            .replacen("4.5", "4-5", 1)
+    } else {
+        s
+    }
+}
+
 /// 根据模型名称返回对应的上下文窗口大小
 ///
 /// 复用 `map_model` 的映射逻辑，确保窗口大小判断与模型映射一致。

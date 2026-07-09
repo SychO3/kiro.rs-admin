@@ -668,6 +668,7 @@ pub async fn post_messages(
     Extension(key_ctx): Extension<KeyContext>,
     JsonExtractor(mut payload): JsonExtractor<MessagesRequest>,
 ) -> Response {
+    payload.model = crate::anthropic::converter::canonicalize_model_id(&payload.model);
     // Count the image budget on inbound to provide precise diagnostics for later context-window-full errors
     let img_stats = count_image_budget(&payload);
     tracing::info!(
@@ -1540,6 +1541,7 @@ pub async fn post_messages_cc(
     Extension(key_ctx): Extension<KeyContext>,
     JsonExtractor(mut payload): JsonExtractor<MessagesRequest>,
 ) -> Response {
+    payload.model = crate::anthropic::converter::canonicalize_model_id(&payload.model);
     tracing::info!(
         model = %payload.model,
         max_tokens = %payload.max_tokens,
