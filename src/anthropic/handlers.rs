@@ -669,6 +669,13 @@ pub async fn post_messages(
     JsonExtractor(mut payload): JsonExtractor<MessagesRequest>,
 ) -> Response {
     payload.model = crate::anthropic::converter::canonicalize_model_id(&payload.model);
+    // 应用模型映射（如 claude-sonnet-5 → claude-sonnet-4-6）
+    if let Some(mappings) = &state.model_mappings {
+        if let Some(target) = mappings.resolve(&payload.model) {
+            tracing::debug!("模型映射命中: {} → {}", payload.model, target);
+            payload.model = target;
+        }
+    }
     // Count the image budget on inbound to provide precise diagnostics for later context-window-full errors
     let img_stats = count_image_budget(&payload);
     tracing::info!(
@@ -1542,6 +1549,13 @@ pub async fn post_messages_cc(
     JsonExtractor(mut payload): JsonExtractor<MessagesRequest>,
 ) -> Response {
     payload.model = crate::anthropic::converter::canonicalize_model_id(&payload.model);
+    // 应用模型映射
+    if let Some(mappings) = &state.model_mappings {
+        if let Some(target) = mappings.resolve(&payload.model) {
+            tracing::debug!("模型映射命中: {} → {}", payload.model, target);
+            payload.model = target;
+        }
+    }
     tracing::info!(
         model = %payload.model,
         max_tokens = %payload.max_tokens,
