@@ -65,9 +65,10 @@ pub async fn refresh_models(State(state): State<AdminState>) -> impl IntoRespons
                 .into_iter()
                 .filter(|m| m.model_id != "auto")
                 .map(|m| {
-                    let owned_by = infer_owned_by(&m.model_id);
+                    let canonical_id = crate::anthropic::converter::canonicalize_model_id(&m.model_id);
+                    let owned_by = infer_owned_by(&canonical_id);
                     crate::anthropic::types::Model {
-                        id: m.model_id,
+                        id: canonical_id,
                         object: "model".to_string(),
                         created: 1781481600,
                         owned_by,
@@ -230,9 +231,10 @@ pub async fn get_credential_models(
                 .iter()
                 .filter(|m| m.model_id != "auto")
                 .map(|m| {
-                    let owned_by = infer_owned_by(&m.model_id);
+                    let canonical_id = crate::anthropic::converter::canonicalize_model_id(&m.model_id);
+                    let owned_by = infer_owned_by(&canonical_id);
                     crate::anthropic::types::Model {
-                        id: m.model_id.clone(),
+                        id: canonical_id,
                         object: "model".to_string(),
                         created: 1781481600,
                         owned_by,
