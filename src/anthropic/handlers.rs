@@ -410,14 +410,14 @@ fn available_models() -> Vec<Model> {
     let mut models = vec![
         model("auto", "Auto", "kiro", 64000),
         model("claude-sonnet-5", "Claude Sonnet 5", "anthropic", 64000),
-        model("claude-opus-4.8", "Claude Opus 4.8", "anthropic", 64000),
-        model("claude-opus-4.7", "Claude Opus 4.7", "anthropic", 64000),
-        model("claude-opus-4.6", "Claude Opus 4.6", "anthropic", 64000),
-        model("claude-sonnet-4.6", "Claude Sonnet 4.6", "anthropic", 64000),
-        model("claude-opus-4.5", "Claude Opus 4.5", "anthropic", 64000),
-        model("claude-sonnet-4.5", "Claude Sonnet 4.5", "anthropic", 64000),
+        model("claude-opus-4-8", "Claude Opus 4.8", "anthropic", 64000),
+        model("claude-opus-4-7", "Claude Opus 4.7", "anthropic", 64000),
+        model("claude-opus-4-6", "Claude Opus 4.6", "anthropic", 64000),
+        model("claude-sonnet-4-6", "Claude Sonnet 4.6", "anthropic", 64000),
+        model("claude-opus-4-5", "Claude Opus 4.5", "anthropic", 64000),
+        model("claude-sonnet-4-5", "Claude Sonnet 4.5", "anthropic", 64000),
         model("claude-sonnet-4", "Claude Sonnet 4", "anthropic", 64000),
-        model("claude-haiku-4.5", "Claude Haiku 4.5", "anthropic", 64000),
+        model("claude-haiku-4-5", "Claude Haiku 4.5", "anthropic", 64000),
         model("deepseek-3.2", "DeepSeek v3.2", "deepseek", 64000),
         model("minimax-m2.5", "MiniMax M2.5", "minimax", 64000),
         model("minimax-m2.1", "MiniMax M2.1", "minimax", 64000),
@@ -644,14 +644,14 @@ fn fallback_models() -> Vec<Model> {
 
     vec![
         model("claude-sonnet-5", "Claude Sonnet 5", "anthropic"),
-        model("claude-opus-4.8", "Claude Opus 4.8", "anthropic"),
-        model("claude-opus-4.7", "Claude Opus 4.7", "anthropic"),
-        model("claude-opus-4.6", "Claude Opus 4.6", "anthropic"),
-        model("claude-sonnet-4.6", "Claude Sonnet 4.6", "anthropic"),
-        model("claude-opus-4.5", "Claude Opus 4.5", "anthropic"),
-        model("claude-sonnet-4.5", "Claude Sonnet 4.5", "anthropic"),
+        model("claude-opus-4-8", "Claude Opus 4.8", "anthropic"),
+        model("claude-opus-4-7", "Claude Opus 4.7", "anthropic"),
+        model("claude-opus-4-6", "Claude Opus 4.6", "anthropic"),
+        model("claude-sonnet-4-6", "Claude Sonnet 4.6", "anthropic"),
+        model("claude-opus-4-5", "Claude Opus 4.5", "anthropic"),
+        model("claude-sonnet-4-5", "Claude Sonnet 4.5", "anthropic"),
         model("claude-sonnet-4", "Claude Sonnet 4", "anthropic"),
-        model("claude-haiku-4.5", "Claude Haiku 4.5", "anthropic"),
+        model("claude-haiku-4-5", "Claude Haiku 4.5", "anthropic"),
         model("deepseek-3.2", "DeepSeek v3.2", "deepseek"),
         model("minimax-m2.5", "MiniMax M2.5", "minimax"),
         model("minimax-m2.1", "MiniMax M2.1", "minimax"),
@@ -2072,8 +2072,8 @@ mod tests {
         assert!(ids.contains(&"minimax-m2.1"));
         assert!(ids.contains(&"glm-5"));
         assert!(ids.contains(&"qwen3-coder-next"));
-        assert!(ids.contains(&"claude-sonnet-4.6"));
-        assert!(ids.contains(&"claude-opus-4.8"));
+        assert!(ids.contains(&"claude-sonnet-4-6"));
+        assert!(ids.contains(&"claude-opus-4-8"));
     }
 
     #[test]

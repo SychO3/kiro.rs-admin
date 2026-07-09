@@ -224,7 +224,7 @@ pub async fn get_credential_models(
     Path(id): Path<u64>,
 ) -> impl IntoResponse {
     match state.service.get_available_models(id).await {
-        Ok(response) => {
+        Ok(mut response) => {
             // 同步到全局 /v1/models 缓存（过滤 auto）
             let models: Vec<crate::anthropic::types::Model> = response
                 .models
@@ -246,6 +246,10 @@ pub async fn get_credential_models(
                 .collect();
             *state.models_cache.write().await = models;
 
+            // 返回给前端时也统一为横杠格式
+            for m in &mut response.models {
+                m.model_id = crate::anthropic::converter::canonicalize_model_id(&m.model_id);
+            }
             Json(response).into_response()
         }
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),

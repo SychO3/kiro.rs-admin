@@ -17,7 +17,7 @@ interface ModelMappingsDialogProps {
 }
 
 /**
- * 模型映射管理：请求时把源模型名（如 gpt-5.5）转发到目标模型名（如 claude-opus-4.8）。
+ * 模型映射管理：请求时把源模型名（如 gpt-5.5）转发到目标模型名（如 claude-opus-4-8）。
  * 源名不出现在 /v1/models 列表，仅在请求命中时转发。大小写不敏感。
  */
 export function ModelMappingsDialog({ open, onOpenChange }: ModelMappingsDialogProps) {
@@ -68,7 +68,7 @@ export function ModelMappingsDialog({ open, onOpenChange }: ModelMappingsDialogP
           </DialogTitle>
           <DialogDescription>
             请求时把源模型名转发到目标模型名（如 <code>gpt-5.5</code> →{' '}
-            <code>claude-opus-4.8</code>）。源名不会出现在 <code>/v1/models</code>{' '}
+            <code>claude-opus-4-8</code>）。源名不会出现在 <code>/v1/models</code>{' '}
             列表，仅在请求命中时转发；匹配大小写不敏感。
           </DialogDescription>
         </DialogHeader>
@@ -88,7 +88,7 @@ export function ModelMappingsDialog({ open, onOpenChange }: ModelMappingsDialogP
           <label className="flex-1 text-xs font-medium text-muted-foreground">
             目标模型名
             <Input
-              placeholder="claude-opus-4.8"
+              placeholder="claude-opus-4-8"
               value={target}
               onChange={(e) => setTarget(e.target.value)}
               disabled={saving}

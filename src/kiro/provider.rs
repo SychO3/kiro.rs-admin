@@ -661,6 +661,7 @@ impl KiroProvider {
         model: &str,
     ) -> anyhow::Result<CredentialTestResult> {
         let mapped_model = normalize_model_id(model);
+        let display_model = crate::anthropic::converter::canonicalize_model_id(&mapped_model);
         let conversation_id = uuid::Uuid::new_v4().to_string();
         let state = ConversationState::new(conversation_id.clone())
             .with_agent_continuation_id(conversation_id)
@@ -704,7 +705,7 @@ impl KiroProvider {
             Err(e) => {
                 return Ok(CredentialTestResult {
                     credential_id: ctx.id,
-                    model: mapped_model,
+                    model: display_model.clone(),
                     success: false,
                     latency_ms: started.elapsed().as_millis() as u64,
                     http_status: None,
@@ -723,7 +724,7 @@ impl KiroProvider {
 
         Ok(CredentialTestResult {
             credential_id: ctx.id,
-            model: mapped_model,
+            model: display_model,
             success,
             latency_ms: started.elapsed().as_millis() as u64,
             http_status: Some(status.as_u16()),
