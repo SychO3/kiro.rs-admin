@@ -312,7 +312,7 @@ export function CredentialCard({
   };
 
   const handleToggleDisabled = () => {
-    // 当前为禁用态 → 这次操作是“启用”，启用成功后顺带刷新一次余额
+    // 当前为禁用态 → 这次操作是“启用”，启用成功后顺带刷新一次配额
     const willEnable = credential.disabled;
     setDisabled.mutate(
       { id: credential.id, disabled: !credential.disabled },
@@ -778,7 +778,7 @@ export function CredentialCard({
         </div>
       </div>
 
-      {/* 余额（大屏） */}
+      {/* 配额（大屏） */}
       <div className="hidden w-44 shrink-0 xl:block">
         {loadingBalance ? (
           <div className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
@@ -798,8 +798,8 @@ export function CredentialCard({
                 }`}
               >
                 {balance.remaining < 0
-                  ? `-$${formatNumber(Math.abs(balance.remaining))}`
-                  : `$${formatNumber(balance.remaining)}`}
+                  ? `-${formatNumber(Math.abs(balance.remaining))}`
+                  : `${formatNumber(balance.remaining)}`}
               </span>
               <span className="text-muted-foreground">
                 {balance.usagePercentage.toFixed(0)}%
@@ -809,7 +809,7 @@ export function CredentialCard({
           </div>
         ) : (
           <div className="text-center text-[11px] text-muted-foreground">
-            余额未查询
+            配额未查询
           </div>
         )}
       </div>
@@ -849,7 +849,7 @@ export function CredentialCard({
           className="hidden h-9 w-9 sm:inline-flex"
           onClick={onRefreshBalance}
           disabled={loadingBalance || credential.disabled}
-          title={credential.disabled ? "已禁用" : "刷新余额"}
+          title={credential.disabled ? "已禁用" : "刷新配额"}
         >
           {loadingBalance ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -1067,7 +1067,7 @@ export function CredentialCard({
             )}
           </dl>
 
-          {/* 余额面板 */}
+          {/* 配额面板 */}
           <div
             className={`flex min-h-[138px] flex-col rounded-xl border p-3 transition-colors sm:min-h-[150px] sm:p-4 ${
               isQuotaExceeded || disabledByQuota
@@ -1078,14 +1078,14 @@ export function CredentialCard({
             {loadingBalance ? (
               <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
-                正在查询余额…
+                正在查询配额…
               </div>
             ) : balance ? (
               <div className="space-y-3">
                 <div className="flex min-w-0 items-end justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                      {balance.remaining < 0 ? "超额" : "余额"}
+                      {balance.remaining < 0 ? "超额" : "剩余配额"}
                     </div>
                     <div
                       className={`mt-0.5 text-xl font-semibold tabular-nums ${
@@ -1097,8 +1097,8 @@ export function CredentialCard({
                       }`}
                     >
                       {balance.remaining < 0
-                        ? `-$${formatNumber(Math.abs(balance.remaining))}`
-                        : `$${formatNumber(balance.remaining)}`}
+                        ? `-${formatNumber(Math.abs(balance.remaining))}`
+                        : `${formatNumber(balance.remaining)}`}
                     </div>
                   </div>
                   <div className="min-w-0 shrink-0 text-right">
@@ -1114,13 +1114,13 @@ export function CredentialCard({
                   <Progress value={balance.usagePercentage} />
                   <div className="grid grid-cols-3 gap-1 text-[11px] tabular-nums text-muted-foreground">
                     <span className="min-w-0 truncate">
-                      已用 ${formatNumber(balance.currentUsage)}
+                      已用 {formatNumber(balance.currentUsage)}
                     </span>
                     <span className="text-center">
                       {balance.usagePercentage.toFixed(1)}%
                     </span>
                     <span className="min-w-0 truncate text-right">
-                      额度 ${formatNumber(balance.usageLimit)}
+                      总配额 {formatNumber(balance.usageLimit)}
                     </span>
                   </div>
                 </div>
@@ -1133,7 +1133,7 @@ export function CredentialCard({
               </div>
             ) : (
               <div className="flex flex-1 items-center justify-center text-center text-[13px] text-muted-foreground">
-                余额未查询，点击顶部"刷新当前页余额"即可加载。
+                配额未查询，点击顶部"刷新配额"即可加载。
               </div>
             )}
           </div>
@@ -1183,12 +1183,12 @@ export function CredentialCard({
                 className="w-full px-2 min-[420px]:w-auto min-[420px]:px-3"
                 onClick={onRefreshBalance}
                 disabled={loadingBalance || credential.disabled}
-                title={credential.disabled ? "已禁用" : "刷新余额"}
+                title={credential.disabled ? "已禁用" : "刷新配额"}
               >
                 <RefreshCw
                   className={`h-3.5 w-3.5 ${loadingBalance ? "animate-spin" : ""}`}
                 />
-                <span className="hidden sm:inline">刷新余额</span>
+                <span className="hidden sm:inline">刷新配额</span>
               </Button>
             </div>
 
