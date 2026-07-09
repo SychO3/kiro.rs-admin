@@ -32,7 +32,8 @@ COPY --from=frontend-builder /app/admin-ui/dist /app/admin-ui/dist
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
-    cargo build --profile docker --no-default-features \
+    touch src/main.rs \
+    && cargo build --profile docker --no-default-features \
     && cp /app/target/docker/kiro-rs /app/kiro-rs
 
 FROM alpine:3.21
