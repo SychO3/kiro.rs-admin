@@ -456,6 +456,16 @@ fn rest_api_region_candidates(sso_region: &str) -> [&'static str; 2] {
     }
 }
 
+/// 从 ARN 中提取区域：arn:aws:codewhisperer:eu-central-1:123:profile/XYZ → eu-central-1
+fn extract_region_from_arn(arn: &str) -> Option<&str> {
+    let parts: Vec<&str> = arn.splitn(6, ':').collect();
+    if parts.len() >= 4 && !parts[3].is_empty() {
+        Some(parts[3])
+    } else {
+        None
+    }
+}
+
 /// 获取使用额度信息
 pub(crate) async fn get_usage_limits(
     credentials: &KiroCredentials,
@@ -523,11 +533,12 @@ pub(crate) async fn get_usage_limits(
 
         let body_text = response.text().await.unwrap_or_default();
 
-        // 403 且仍有备用端点时，尝试下一个区域端点（Enterprise/IdC 跨区兼容）
-        if status.as_u16() == 403 && idx + 1 < candidates.len() {
+        // 403/400 且仍有备用端点时，尝试下一个区域端点（Enterprise/IdC 跨区兼容）
+        if (status.as_u16() == 403 || status.as_u16() == 400) && idx + 1 < candidates.len() {
             tracing::debug!(
-                "getUsageLimits 在 {} 返回 403，尝试备用端点 {}",
+                "getUsageLimits 在 {} 返回 {}，尝试备用端点 {}",
                 region,
+                status,
                 candidates[idx + 1]
             );
             last_error = Some(format!("{} {}", status, body_text));
@@ -2790,6 +2801,19 @@ impl MultiTokenManager {
         // 已有真实 ARN（含 Social 共享 ARN）→ 直接用，无需查询
         if let Some(arn) = credentials.profile_arn.as_deref() {
             if !is_placeholder_profile_arn(arn) {
+                // 确保 api_region 与 ARN 中的区域一致
+                if let Some(region) = extract_region_from_arn(arn) {
+                    if credentials.api_region.as_deref() != Some(region) {
+                        let mut entries = self.entries.lock();
+                        if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+                            entry.credentials.api_region = Some(region.to_string());
+                            tracing::info!(
+                                "凭据 #{} api_region 从 profileArn 回填为 {}",
+                                id, region
+                            );
+                        }
+                    }
+                }
                 return Ok(Some(arn.to_string()));
             }
         }
@@ -2805,11 +2829,20 @@ impl MultiTokenManager {
             return Ok(None);
         };
 
-        // 写回真实 ARN 并持久化
+        // 写回真实 ARN 并持久化；同时从 ARN 提取 region 回填 api_region
         {
             let mut entries = self.entries.lock();
             if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
                 entry.credentials.profile_arn = Some(arn.clone());
+                if let Some(region) = extract_region_from_arn(&arn) {
+                    if entry.credentials.api_region.as_deref() != Some(region) {
+                        tracing::info!(
+                            "凭据 #{} api_region 从 profileArn 回填为 {}",
+                            id, region
+                        );
+                        entry.credentials.api_region = Some(region.to_string());
+                    }
+                }
             }
         }
         if let Err(e) = self.persist_credentials() {
