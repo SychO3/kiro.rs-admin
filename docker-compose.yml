@@ -1,6 +1,6 @@
 services:
   kiro-rs:
-    image: ${KIRO_RS_IMAGE:-zyphrzero/kiro-rs:latest}
+    image: kiro-rs:test
     container_name: kiro-rs
     extra_hosts:
       - "host.docker.internal:host-gateway"

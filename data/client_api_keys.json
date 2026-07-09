@@ -1,0 +1,62 @@
+[
+  {
+    "id": 0,
+    "key": "sk-kiro-rs-qazWSXedcRFV123456",
+    "name": "默认密钥",
+    "description": "由 config.json apiKey 自动导入（系统密钥）",
+    "disabled": false,
+    "createdAt": "2026-07-08T18:40:21.969188307+00:00",
+    "totalCalls": 0,
+    "totalInputTokens": 0,
+    "totalOutputTokens": 0,
+    "totalCacheCreationTokens": 0,
+    "totalCacheReadTokens": 0,
+    "totalCredits": 0.0,
+    "isSystem": true
+  },
+  {
+    "id": 1,
+    "key": "sk-kiro-39a6b13c90dabf1e03ea6e96d3f5f5e2dfbb8253",
+    "name": "默认密钥",
+    "description": "由 config.json apiKey 自动导入（系统密钥）",
+    "disabled": false,
+    "createdAt": "2026-07-08T18:41:26.747395828+00:00",
+    "totalCalls": 0,
+    "totalInputTokens": 0,
+    "totalOutputTokens": 0,
+    "totalCacheCreationTokens": 0,
+    "totalCacheReadTokens": 0,
+    "totalCredits": 0.0,
+    "isSystem": true
+  },
+  {
+    "id": 2,
+    "key": "sk-cf31de38105aeb18a37a3d41b9e3a386244318efb81b4640",
+    "name": "默认密钥",
+    "description": "由 config.json apiKey 自动导入（系统密钥）",
+    "disabled": false,
+    "createdAt": "2026-07-08T18:42:26.673638272+00:00",
+    "totalCalls": 0,
+    "totalInputTokens": 0,
+    "totalOutputTokens": 0,
+    "totalCacheCreationTokens": 0,
+    "totalCacheReadTokens": 0,
+    "totalCredits": 0.0,
+    "isSystem": true
+  },
+  {
+    "id": 3,
+    "key": "csk_4NkrYAFPe0ByAqcmntFiEgtOmwbaeImc",
+    "name": "default",
+    "disabled": false,
+    "createdAt": "2026-07-08T19:12:41.684386001+00:00",
+    "lastUsedAt": "2026-07-09T01:24:12.291642421+00:00",
+    "totalCalls": 2,
+    "totalInputTokens": 4144,
+    "totalOutputTokens": 72,
+    "totalCacheCreationTokens": 0,
+    "totalCacheReadTokens": 0,
+    "totalCredits": 0.015499764610281923,
+    "isSystem": true
+  }
+]

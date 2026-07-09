@@ -585,16 +585,52 @@ fn available_models() -> Vec<Model> {
 
 /// GET /v1/models
 ///
-/// 返回可用的模型列表
-pub async fn get_models() -> impl IntoResponse {
+/// 返回可用的模型列表（优先使用管理员手动刷新的动态列表）
+pub async fn get_models(State(state): State<AppState>) -> impl IntoResponse {
     tracing::info!("Received GET /v1/models request");
 
-    let models = available_models();
+    let cached = state.models_cache.read().await;
+    let models = if cached.is_empty() {
+        drop(cached);
+        fallback_models()
+    } else {
+        cached.clone()
+    };
 
     Json(ModelsResponse {
         object: "list".to_string(),
         data: models,
     })
+}
+
+/// 精简的回退模型列表（未刷新时使用，不含 thinking 变体/别名/auto）
+fn fallback_models() -> Vec<Model> {
+    let model = |id: &str, display_name: &str, owned_by: &str| Model {
+        id: id.to_string(),
+        object: "model".to_string(),
+        created: 1781481600,
+        owned_by: owned_by.to_string(),
+        display_name: display_name.to_string(),
+        model_type: "chat".to_string(),
+        max_tokens: 64000,
+    };
+
+    vec![
+        model("claude-sonnet-5", "Claude Sonnet 5", "anthropic"),
+        model("claude-opus-4.8", "Claude Opus 4.8", "anthropic"),
+        model("claude-opus-4.7", "Claude Opus 4.7", "anthropic"),
+        model("claude-opus-4.6", "Claude Opus 4.6", "anthropic"),
+        model("claude-sonnet-4.6", "Claude Sonnet 4.6", "anthropic"),
+        model("claude-opus-4.5", "Claude Opus 4.5", "anthropic"),
+        model("claude-sonnet-4.5", "Claude Sonnet 4.5", "anthropic"),
+        model("claude-sonnet-4", "Claude Sonnet 4", "anthropic"),
+        model("claude-haiku-4.5", "Claude Haiku 4.5", "anthropic"),
+        model("deepseek-3.2", "DeepSeek v3.2", "deepseek"),
+        model("minimax-m2.5", "MiniMax M2.5", "minimax"),
+        model("minimax-m2.1", "MiniMax M2.1", "minimax"),
+        model("glm-5", "GLM 5", "zhipu"),
+        model("qwen3-coder-next", "Qwen3 Coder Next", "qwen"),
+    ]
 }
 
 /// POST /v1/messages

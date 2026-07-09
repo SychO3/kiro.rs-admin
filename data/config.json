@@ -1,0 +1,14 @@
+{
+  "host": "0.0.0.0",
+  "port": 8990,
+  "apiKey": "csk_4NkrYAFPe0ByAqcmntFiEgtOmwbaeImc",
+  "tlsBackend": "rustls",
+  "region": "us-east-1",
+  "adminApiKey": "sk-f145e3c2978b88d5a96b0394ebfc9a4d424c4bd55bb35f48",
+  "defaultEndpoint": "ide",
+  "updateAutoApply": false,
+  "updateAutoApplyTime": "03:00",
+  "traceEnabled": true,
+  "traceRetentionDays": 7,
+  "usageLogRetentionDays": 31
+}

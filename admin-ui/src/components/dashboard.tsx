@@ -1418,9 +1418,9 @@ export function Dashboard({ onLogout, embedded = false }: DashboardProps) {
           {/* 第二行：筛选（左） + 操作（右） */}
           <div className="flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
             {/* 筛选器 — 左（移动端两列网格并排，桌面端内联） */}
-            <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
+            <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
               {/* 模糊搜索：来源渠道（备注）/ 邮箱；移动端整行、桌面端 200px */}
-              <div className="relative col-span-2 sm:col-span-1 sm:w-[200px]">
+              <div className="relative w-full sm:w-[200px]">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                 <input
                   type="text"
@@ -1510,7 +1510,7 @@ export function Dashboard({ onLogout, embedded = false }: DashboardProps) {
               </DropdownMenu>
 
               {/* 卡片 / 列表 视图切换（iOS 分段控件） */}
-              <div className="col-span-2 inline-flex h-8 shrink-0 items-center justify-self-start rounded-full border border-border bg-card/60 p-0.5 backdrop-blur sm:col-span-1">
+              <div className="inline-flex h-8 shrink-0 items-center rounded-full border border-border bg-card/60 p-0.5 backdrop-blur">
                 <button
                   type="button"
                   onClick={() => changeViewMode("card")}
@@ -1545,7 +1545,7 @@ export function Dashboard({ onLogout, embedded = false }: DashboardProps) {
                 onClick={() => changePrivacyMode(!privacyMode)}
                 aria-pressed={privacyMode}
                 title={privacyMode ? "关闭隐私模式，显示完整邮箱" : "开启隐私模式，隐藏完整邮箱"}
-                className={`inline-flex h-8 w-full items-center justify-center gap-1 rounded-full border border-border bg-card/60 px-3 text-sm backdrop-blur transition-colors hover:bg-accent sm:w-auto ${
+                className={`inline-flex h-8 items-center justify-center gap-1 rounded-full border border-border bg-card/60 px-3 text-sm backdrop-blur transition-colors hover:bg-accent sm:w-auto ${
                   privacyMode ? "text-foreground" : "text-muted-foreground"
                 }`}
               >
@@ -1559,7 +1559,7 @@ export function Dashboard({ onLogout, embedded = false }: DashboardProps) {
             </div>
 
             {/* 操作 — 右（移动端整宽两列网格，桌面端右对齐内联） */}
-            <div className="ml-auto grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
+            <div className="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto">
               {selectedIds.size > 0 && (
                 <>
                   <Button
@@ -1575,7 +1575,7 @@ export function Dashboard({ onLogout, embedded = false }: DashboardProps) {
                     onClick={handleBatchDelete}
                     size="sm"
                     variant="destructive"
-                    className="w-full sm:w-auto"
+                    className="flex-1 sm:flex-none"
                     disabled={selectedIds.size === 0}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -1589,7 +1589,7 @@ export function Dashboard({ onLogout, embedded = false }: DashboardProps) {
               <Button
                 onClick={() => setAddDialogOpen(true)}
                 size="sm"
-                className="w-full sm:w-auto"
+                className="flex-1 sm:flex-none"
               >
                 <Plus className="h-3.5 w-3.5" />
                 添加凭据
@@ -1601,7 +1601,7 @@ export function Dashboard({ onLogout, embedded = false }: DashboardProps) {
                   <Button
                     size="sm"
                     variant="outline"
-                    className="w-full sm:w-auto"
+                    className="flex-1 sm:flex-none"
                   >
                     <Upload className="h-3.5 w-3.5" />
                     登录 / 导入 / 导出
@@ -1667,7 +1667,7 @@ export function Dashboard({ onLogout, embedded = false }: DashboardProps) {
                     size="sm"
                     variant="outline"
                     title="更多操作"
-                    className="w-full sm:w-auto"
+                    className="flex-1 sm:flex-none"
                   >
                     <MoreHorizontal className="h-3.5 w-3.5" />
                     <span className="sm:hidden">更多</span>

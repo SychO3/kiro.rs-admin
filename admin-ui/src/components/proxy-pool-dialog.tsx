@@ -391,7 +391,7 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col">
+      <DialogContent className="w-[calc(100%-2rem)] max-w-2xl max-h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>代理 IP 池管理</DialogTitle>
         </DialogHeader>
@@ -431,32 +431,37 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
 
           {/* 单条添加 */}
           {!showBatch && (
-            <form onSubmit={handleAdd} className="flex gap-2">
-              <Input
-                placeholder="代理 URL（如 socks5://user:pass@host:port）"
-                value={newUrl}
-                onChange={(e) => setNewUrl(e.target.value)}
-                className="flex-1 font-mono text-sm"
-              />
-              <Input
-                placeholder="备注（可选）"
-                value={newLabel}
-                onChange={(e) => setNewLabel(e.target.value)}
-                className="w-32"
-              />
-              <Button type="submit" size="sm" disabled={addMutation.isPending || !newUrl.trim()}>
-                <Plus className="h-4 w-4 mr-1" />
-                添加
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => setShowBatch(true)}
-              >
-                <Upload className="h-4 w-4 mr-1" />
-                批量
-              </Button>
+            <form onSubmit={handleAdd} className="space-y-2">
+              <div className="flex gap-2">
+                <Input
+                  placeholder="代理 URL（如 socks5://user:pass@host:port）"
+                  value={newUrl}
+                  onChange={(e) => setNewUrl(e.target.value)}
+                  className="flex-1 min-w-0 font-mono text-sm"
+                />
+                <Input
+                  placeholder="备注（可选）"
+                  value={newLabel}
+                  onChange={(e) => setNewLabel(e.target.value)}
+                  className="w-24 sm:w-32"
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button type="submit" size="sm" disabled={addMutation.isPending || !newUrl.trim()} className="flex-1 sm:flex-none">
+                  <Plus className="h-4 w-4 mr-1" />
+                  添加
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setShowBatch(true)}
+                  className="flex-1 sm:flex-none"
+                >
+                  <Upload className="h-4 w-4 mr-1" />
+                  批量导入
+                </Button>
+              </div>
             </form>
           )}
 
@@ -645,47 +650,50 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
                 const isGlobal = globalProxyCandidateSet.has(proxy.url)
                 const isChecking = checkingIds.has(proxy.id)
                 return (
-                  <div key={proxy.id} className="flex items-center gap-3 p-3">
-                    <Checkbox
-                      checked={selectedIds.has(proxy.id)}
-                      onCheckedChange={(checked) => toggleSelected(proxy.id, checked === true)}
-                      title="选择此代理"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-mono text-xs truncate">
-                          {maskProxyUrl(proxy.url)}
-                        </span>
-                        {proxy.label && (
-                          <Badge variant="secondary" className="text-xs">{proxy.label}</Badge>
-                        )}
-                        {isGlobal && (
-                          <Badge variant="secondary" className="text-xs gap-1">
-                            <Globe className="h-3 w-3" />
-                            全局
-                          </Badge>
-                        )}
-                        {renderHealthBadge(proxy)}
-                        {!proxy.enabled && (
-                          <Badge variant="outline" className="text-xs text-muted-foreground">
-                            {proxy.autoDisabled ? '自动禁用' : '已禁用'}
-                          </Badge>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-3 mt-0.5">
-                        {proxy.credentialCount > 0 && (
-                          <span className="text-xs text-muted-foreground">
-                            {proxy.credentialCount} 个凭据使用中
+                  <div key={proxy.id} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:gap-3">
+                    <div className="flex items-start gap-2 sm:items-center sm:gap-3 min-w-0 flex-1">
+                      <Checkbox
+                        checked={selectedIds.has(proxy.id)}
+                        onCheckedChange={(checked) => toggleSelected(proxy.id, checked === true)}
+                        title="选择此代理"
+                        className="mt-0.5 sm:mt-0"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-mono text-xs break-all">
+                            {maskProxyUrl(proxy.url)}
                           </span>
-                        )}
-                        {proxy.lastCheckedAt && (
-                          <span className="text-xs text-muted-foreground">
-                            检测于 {new Date(proxy.lastCheckedAt).toLocaleString()}
-                          </span>
-                        )}
+                          {proxy.label && (
+                            <Badge variant="secondary" className="text-xs">{proxy.label}</Badge>
+                          )}
+                          {isGlobal && (
+                            <Badge variant="secondary" className="text-xs gap-1">
+                              <Globe className="h-3 w-3" />
+                              全局
+                            </Badge>
+                          )}
+                          {renderHealthBadge(proxy)}
+                          {!proxy.enabled && (
+                            <Badge variant="outline" className="text-xs text-muted-foreground">
+                              {proxy.autoDisabled ? '自动禁用' : '已禁用'}
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 mt-0.5">
+                          {proxy.credentialCount > 0 && (
+                            <span className="text-xs text-muted-foreground">
+                              {proxy.credentialCount} 个凭据使用中
+                            </span>
+                          )}
+                          {proxy.lastCheckedAt && (
+                            <span className="text-xs text-muted-foreground">
+                              检测于 {new Date(proxy.lastCheckedAt).toLocaleString()}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1 shrink-0">
+                    <div className="flex items-center gap-1 shrink-0 pl-6 sm:pl-0">
                       <label
                         className="inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs"
                         title={proxy.enabled || isGlobal ? '是否作为全局代理候选' : '启用代理后才能设为全局'}
@@ -706,7 +714,7 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
                         title="测试此代理连通性"
                       >
                         <Activity className="h-3 w-3 mr-1" />
-                        {isChecking ? '测试中' : '测试'}
+                        {isChecking ? '...' : '测试'}
                       </Button>
                       {onSelectProxy && proxy.enabled && (
                         <Button

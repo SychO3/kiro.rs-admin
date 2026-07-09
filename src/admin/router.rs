@@ -19,6 +19,7 @@ use super::{
         list_groups, list_model_mappings, list_traces, poll_idc_login, poll_idc_relogin,
         poll_social_login, poll_social_relogin, replace_model_mappings, upsert_model_mapping,
         pull_update_image, reset_all_success_count, reset_client_key_stats, reset_failure_count,
+        refresh_models,
         reset_success_count, rollback_image_update, rotate_client_key, set_account_throttle_config,
         set_client_key_disabled, set_credential_disabled, set_credential_overage,
         set_credential_priority, set_global_proxy, set_load_balancing_mode,
@@ -177,6 +178,7 @@ pub fn create_admin_router(state: AdminState) -> Router {
                 .put(replace_model_mappings),
         )
         .route("/model-mappings/{source}", delete(delete_model_mapping))
+        .route("/models/refresh", post(refresh_models))
         .route("/stats/overview", get(stats_overview))
         .route("/stats/timeseries", get(stats_timeseries))
         .route("/stats/by-model", get(stats_by_model))

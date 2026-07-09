@@ -9,6 +9,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Json, Response},
 };
+use tokio::sync::RwLock;
 
 use crate::admin::client_keys::SharedClientKeyManager;
 use crate::admin::trace_db::{SharedTraceStore, TraceKeySource};
@@ -17,7 +18,7 @@ use crate::common::auth;
 use crate::kiro::provider::KiroProvider;
 
 use super::cache_metering::SharedCacheMeter;
-use super::types::ErrorResponse;
+use super::types::{ErrorResponse, Model};
 
 /// 命中的鉴权上下文（注入到请求扩展，供 handler 记录用量）
 #[derive(Clone, Debug)]
@@ -52,6 +53,8 @@ pub struct AppState {
     pub trace_store: Option<SharedTraceStore>,
     /// 模型映射（OpenAI 兼容层请求时把源模型名转发到目标模型名）
     pub model_mappings: Option<crate::admin::SharedModelMappingManager>,
+    /// 动态模型列表缓存（管理员手动刷新）
+    pub models_cache: Arc<RwLock<Vec<Model>>>,
 }
 
 impl AppState {
@@ -71,6 +74,7 @@ impl AppState {
             cache_meter: None,
             trace_store: None,
             model_mappings: None,
+            models_cache: Arc::new(RwLock::new(Vec::new())),
         }
     }
 

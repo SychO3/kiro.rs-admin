@@ -319,6 +319,8 @@ async fn main() {
         }),
     );
 
+    let models_cache = std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new()));
+
     let anthropic_app = anthropic::create_router(
         Some(kiro_provider.clone()),
         config.extract_thinking,
@@ -329,6 +331,7 @@ async fn main() {
         Some(cache_meter.clone()),
         trace_store.clone(),
         Some(model_mapping_manager.clone()),
+        models_cache.clone(),
     );
 
     // 构建 Admin API 路由（配置了非空 adminApiKey 时启用）
@@ -362,6 +365,7 @@ async fn main() {
                 admin_trace_store,
                 group_manager.clone(),
                 model_mapping_manager.clone(),
+                models_cache.clone(),
             );
 
             // 启动余额后台刷新调度器（每 5 分钟一次，与缓存 TTL 对齐）

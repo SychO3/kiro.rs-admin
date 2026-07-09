@@ -36,6 +36,78 @@ use super::{
 // Path 元组提取：(credential_id, session_id)
 type CredSessionPath = (u64, String);
 
+/// POST /api/admin/models/refresh
+/// 管理员手动刷新模型列表：从第一个可用凭据查询上游，更新缓存
+pub async fn refresh_models(State(state): State<AdminState>) -> impl IntoResponse {
+    // 取第一个可用凭据的 ID
+    let snapshot = state.service.token_manager().snapshot();
+    let first_id = snapshot
+        .entries
+        .iter()
+        .find(|e| !e.disabled && e.failure_count == 0)
+        .or_else(|| snapshot.entries.first())
+        .map(|e| e.id);
+
+    let Some(id) = first_id else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(super::types::AdminErrorResponse::invalid_request(
+                "无可用凭据，无法刷新模型列表".to_string(),
+            )),
+        )
+            .into_response();
+    };
+
+    match state.service.get_available_models(id).await {
+        Ok(response) => {
+            let models: Vec<crate::anthropic::types::Model> = response
+                .models
+                .into_iter()
+                .filter(|m| m.model_id != "auto")
+                .map(|m| {
+                    let owned_by = infer_owned_by(&m.model_id);
+                    crate::anthropic::types::Model {
+                        id: m.model_id,
+                        object: "model".to_string(),
+                        created: 1781481600,
+                        owned_by,
+                        display_name: m.model_name.unwrap_or_default(),
+                        model_type: "chat".to_string(),
+                        max_tokens: 64000,
+                    }
+                })
+                .collect();
+
+            let count = models.len();
+            *state.models_cache.write().await = models;
+
+            Json(SuccessResponse::new(format!(
+                "已刷新模型列表，共 {} 个模型",
+                count
+            )))
+            .into_response()
+        }
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+fn infer_owned_by(model_id: &str) -> String {
+    let id = model_id.to_lowercase();
+    if id.starts_with("claude-") {
+        "anthropic".to_string()
+    } else if id.starts_with("deepseek") {
+        "deepseek".to_string()
+    } else if id.starts_with("minimax") {
+        "minimax".to_string()
+    } else if id.starts_with("glm") {
+        "zhipu".to_string()
+    } else if id.starts_with("qwen") {
+        "qwen".to_string()
+    } else {
+        "kiro".to_string()
+    }
+}
+
 /// GET /api/admin/credentials
 /// 获取所有凭据状态
 pub async fn get_all_credentials(State(state): State<AdminState>) -> impl IntoResponse {

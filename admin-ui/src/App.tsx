@@ -209,7 +209,7 @@ function AppHeader({
 }: AppHeaderProps) {
   return (
     <header className="sticky top-0 z-50 w-full glass">
-      <div className="mx-auto flex h-14 max-w-[1400px] min-w-0 items-center gap-2 px-3 sm:h-16 sm:px-4 xl:px-8">
+      <div className="mx-auto flex h-14 max-w-[1400px] min-w-0 items-center gap-1.5 px-2 sm:h-16 sm:gap-2 sm:px-4 xl:px-8">
         <HeaderBrand tab={tab} onSwitchTab={onSwitchTab} />
         <HeaderActions
           darkMode={darkMode}
@@ -230,14 +230,14 @@ function HeaderBrand({
   tab: Tab;
 }) {
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-2 xl:gap-3">
+    <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2 xl:gap-3">
       <img
         src="/admin/kirors.png"
         alt="Kiro"
-        className="size-8 shrink-0 object-contain xl:size-9"
+        className="size-7 shrink-0 object-contain sm:size-8 xl:size-9"
         draggable={false}
       />
-      <span className="min-w-0 truncate text-sm font-semibold tracking-tight min-[380px]:text-base">
+      <span className="hidden min-w-0 truncate text-sm font-semibold tracking-tight min-[360px]:inline sm:text-base">
         Kiro Admin
       </span>
       <DesktopTabs tab={tab} onSwitchTab={onSwitchTab} />
@@ -276,7 +276,7 @@ function HeaderActions({
   onToggleDarkMode: () => void;
 }) {
   return (
-    <div className="flex shrink-0 items-center gap-1">
+    <div className="flex shrink-0 items-center gap-0.5 sm:gap-1">
       <div className="xl:hidden">
         <TopbarTools compact />
       </div>
@@ -285,10 +285,10 @@ function HeaderActions({
       </div>
       <span className="mx-1 hidden h-5 w-px bg-border/70 xl:inline-block" />
       <GithubButton />
-      <Button variant="ghost" size="icon" onClick={onToggleDarkMode} title="切换主题">
+      <Button variant="ghost" size="icon" className="h-8 w-8 sm:h-9 sm:w-9" onClick={onToggleDarkMode} title="切换主题">
         {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
       </Button>
-      <Button variant="ghost" size="icon" onClick={onLogout} title="退出登录">
+      <Button variant="ghost" size="icon" className="h-8 w-8 sm:h-9 sm:w-9" onClick={onLogout} title="退出登录">
         <LogOut className="h-4 w-4" />
       </Button>
     </div>
@@ -324,7 +324,7 @@ function MobileTabs({
   tab: Tab;
 }) {
   return (
-    <div className="mx-auto flex max-w-[1400px] items-center gap-1 overflow-x-auto px-3 pb-2 xl:hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    <div className="mx-auto grid max-w-[1400px] grid-cols-5 gap-0.5 px-2 pb-2 sm:px-3 xl:hidden">
       {TABS.map((t) => (
         <TabButton
           key={t.key}
@@ -350,7 +350,7 @@ function TabButton({
   tab: (typeof TABS)[number];
 }) {
   const className = mobile
-    ? "h-8 min-w-[4.25rem] flex-1 overflow-hidden rounded-full px-2 text-[11px] min-[360px]:min-w-[4.75rem] min-[390px]:px-3 min-[390px]:text-xs md:min-w-0 md:flex-none md:px-3"
+    ? "h-8 w-full rounded-full px-1 text-[11px] min-[390px]:px-2 min-[390px]:text-xs"
     : "h-7 rounded-full px-3 text-xs";
   const label = mobile ? tab.mobileLabel : tab.label;
 
@@ -361,10 +361,8 @@ function TabButton({
       className={className}
       onClick={() => onSwitchTab(tab.key)}
     >
-      {tab.icon}
-      <span className={mobile ? "min-w-0 truncate" : undefined}>
-        {label}
-      </span>
+      <span className="hidden min-[390px]:inline">{tab.icon}</span>
+      <span className="min-w-0 truncate">{label}</span>
     </Button>
   );
 }

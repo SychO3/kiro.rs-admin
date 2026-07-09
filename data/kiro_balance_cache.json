@@ -1,0 +1,17 @@
+{
+  "1": {
+    "cached_at": 1783562209.0,
+    "data": {
+      "id": 1,
+      "subscriptionTitle": "KIRO POWER",
+      "currentUsage": 5253.0,
+      "usageLimit": 10000.0,
+      "remaining": 4747.0,
+      "usagePercentage": 52.53,
+      "nextResetAt": 1785542400.0,
+      "overageEnabled": false,
+      "overageCapable": true,
+      "overageCapabilityRaw": "OVERAGE_CAPABLE"
+    }
+  }
+}

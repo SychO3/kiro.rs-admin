@@ -37,6 +37,8 @@ pub struct AdminState {
     pub groups: SharedGroupManager,
     /// 模型映射注册表（持久化到 model_mappings.json，与 anthropic 路由共享）
     pub model_mappings: super::model_mapping::SharedModelMappingManager,
+    /// 动态模型列表缓存（与 anthropic 路由共享）
+    pub models_cache: Arc<tokio::sync::RwLock<Vec<crate::anthropic::types::Model>>>,
 }
 
 impl AdminState {
@@ -49,6 +51,7 @@ impl AdminState {
         trace_store: SharedTraceStore,
         groups: SharedGroupManager,
         model_mappings: super::model_mapping::SharedModelMappingManager,
+        models_cache: Arc<tokio::sync::RwLock<Vec<crate::anthropic::types::Model>>>,
     ) -> Self {
         Self {
             admin_api_key: Arc::new(RwLock::new(admin_api_key.into())),
@@ -58,6 +61,7 @@ impl AdminState {
             trace_store,
             groups,
             model_mappings,
+            models_cache,
         }
     }
 }
