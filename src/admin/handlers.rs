@@ -1875,27 +1875,11 @@ pub async fn webshare_replace(
     match crate::admin::webshare::replace_and_sync(&client, state.service.proxy_pool(), proxy_id).await {
         Ok(r) => {
             if let Some(old) = old_url {
-                if let Some(global) = state.service.get_global_proxy() {
-                    if global.contains(&old) {
-                        let new_entries: Vec<String> = state
-                            .service
-                            .proxy_pool()
-                            .list()
-                            .iter()
-                            .filter(|e| e.label.as_deref().map(|l| l.starts_with("WS-")).unwrap_or(false))
-                            .map(|e| e.url.clone())
-                            .collect();
-                        if !new_entries.is_empty() {
-                            let updated = global
-                                .split('\n')
-                                .filter(|line| line.trim() != old.trim())
-                                .chain(new_entries.iter().filter(|u| !global.contains(u.as_str())).map(|s| s.as_str()))
-                                .collect::<Vec<_>>()
-                                .join("\n");
-                            let _ = state.service.set_global_proxy(Some(updated));
-                        }
-                    }
-                }
+                crate::admin::webshare::update_global_proxy_after_replace(
+                    state.service.token_manager(),
+                    state.service.proxy_pool(),
+                    &old,
+                );
             }
             Json(serde_json::json!({
                 "message": "替换完成",

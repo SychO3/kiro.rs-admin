@@ -209,7 +209,7 @@ fn extract_ip_from_url(url: &str) -> Option<String> {
     Some(host.to_string())
 }
 
-/// 替换后更新全局代理：把旧 URL 替换为池中当前的 WS- 代理
+/// 替换后更新全局代理：把旧 URL 替换为新的 WS- 代理 URL
 pub fn update_global_proxy_after_replace(
     tm: &MultiTokenManager,
     pool: &ProxyPoolManager,
@@ -221,29 +221,19 @@ pub fn update_global_proxy_after_replace(
     if !global.url.contains(old_url) {
         return;
     }
-    let new_ws_urls: Vec<String> = pool
+    let new_url = pool
         .list()
         .iter()
-        .filter(|e| e.label.as_deref().map(|l| l.starts_with("WS-")).unwrap_or(false))
-        .map(|e| e.url.clone())
-        .collect();
-    if new_ws_urls.is_empty() {
-        return;
+        .find(|e| {
+            e.enabled
+                && e.label.as_deref().map(|l| l.starts_with("WS-")).unwrap_or(false)
+                && e.url != old_url
+        })
+        .map(|e| e.url.clone());
+    if let Some(url) = new_url {
+        tm.set_global_proxy(Some(ProxyConfig::new(&url)));
+        tracing::info!("全局代理已更新为: {}", url);
     }
-    let updated: Vec<&str> = global
-        .url
-        .split('\n')
-        .filter(|line| line.trim() != old_url.trim())
-        .chain(
-            new_ws_urls
-                .iter()
-                .filter(|u| !global.url.contains(u.as_str()))
-                .map(|s| s.as_str()),
-        )
-        .collect();
-    let joined = updated.join("\n");
-    tm.set_global_proxy(Some(ProxyConfig::new(&joined)));
-    tracing::info!("全局代理已更新（替换旧 URL）");
 }
 
 /// 后台定时同步任务
