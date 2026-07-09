@@ -225,8 +225,8 @@ function TokenCell({ rec }: { rec: TraceRecord }) {
     <TooltipProvider delayDuration={150}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="inline-flex flex-col gap-0 leading-tight cursor-default border-b border-dotted border-muted-foreground/40">
-            <span className="inline-flex items-center gap-1 font-mono tabular-nums">
+          <div className="inline-flex flex-col gap-0 leading-tight cursor-default">
+            <span className="inline-flex items-center gap-1 font-mono tabular-nums border-b border-dotted border-muted-foreground/40">
               <span className="text-emerald-600 dark:text-emerald-400">
                 ↓{formatTokens(input + cacheCreation + cacheRead)}
               </span>
