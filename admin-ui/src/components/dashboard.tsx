@@ -1119,7 +1119,7 @@ export function Dashboard({ onLogout, embedded = false }: DashboardProps) {
   const handleToggleLoadBalancing = () => {
     const cur = (loadBalancingData?.mode ?? "priority") as LoadBalancingMode;
     const next = nextLbMode(cur);
-    setLoadBalancingMode(next, {
+    setLoadBalancingMode({ mode: next }, {
       onSuccess: () => toast.success(`已切换到${LB_LABEL[next]}模式`),
       onError: (err) => toast.error(`切换失败: ${extractErrorMessage(err)}`),
     });

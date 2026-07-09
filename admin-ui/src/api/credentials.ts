@@ -453,14 +453,14 @@ export const nextLbMode = (m: LoadBalancingMode): LoadBalancingMode =>
   LB_ORDER[(LB_ORDER.indexOf(m) + 1) % LB_ORDER.length]
 
 // 获取负载均衡模式
-export async function getLoadBalancingMode(): Promise<{ mode: LoadBalancingMode }> {
-  const { data } = await api.get<{ mode: LoadBalancingMode }>('/config/load-balancing')
+export async function getLoadBalancingMode(): Promise<{ mode: LoadBalancingMode; affinityEnabled: boolean }> {
+  const { data } = await api.get<{ mode: LoadBalancingMode; affinityEnabled: boolean }>('/config/load-balancing')
   return data
 }
 
 // 设置负载均衡模式
-export async function setLoadBalancingMode(mode: LoadBalancingMode): Promise<{ mode: LoadBalancingMode }> {
-  const { data } = await api.put<{ mode: LoadBalancingMode }>('/config/load-balancing', { mode })
+export async function setLoadBalancingMode(params: { mode?: LoadBalancingMode; affinityEnabled?: boolean }): Promise<{ mode: LoadBalancingMode; affinityEnabled: boolean }> {
+  const { data } = await api.put<{ mode: LoadBalancingMode; affinityEnabled: boolean }>('/config/load-balancing', params)
   return data
 }
 

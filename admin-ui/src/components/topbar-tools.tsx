@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useState, type ComponentPropsWithoutRef } from 'react'
 import {
-  Activity, RefreshCw, UploadCloud, Settings, Key, Wand2, Eye, EyeOff, Copy,
+  Activity, Link, RefreshCw, UploadCloud, Settings, Key, Wand2, Eye, EyeOff, Copy,
   MoreHorizontal, ShieldAlert, ShieldCheck, Gauge, Shuffle,
 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -67,8 +67,16 @@ export function TopbarTools({ compact = false }: TopbarToolsProps) {
   const handleToggleLoadBalancing = () => {
     const cur = (loadBalancingData?.mode ?? 'priority') as LoadBalancingMode
     const next = nextLbMode(cur)
-    setLoadBalancingMode(next, {
+    setLoadBalancingMode({ mode: next }, {
       onSuccess: () => toast.success(`已切换到${LB_LABEL[next]}模式`),
+      onError: (err) => toast.error(`切换失败: ${extractErrorMessage(err)}`),
+    })
+  }
+
+  const handleToggleAffinity = () => {
+    const cur = loadBalancingData?.affinityEnabled ?? true
+    setLoadBalancingMode({ affinityEnabled: !cur }, {
+      onSuccess: () => toast.success(!cur ? '已开启客户端亲和性' : '已关闭客户端亲和性'),
       onError: (err) => toast.error(`切换失败: ${extractErrorMessage(err)}`),
     })
   }
@@ -110,7 +118,9 @@ export function TopbarTools({ compact = false }: TopbarToolsProps) {
   }
 
   const controls = {
+    affinityEnabled: loadBalancingData?.affinityEnabled ?? true,
     handleRefresh,
+    handleToggleAffinity,
     handleToggleFailover,
     handleToggleLoadBalancing,
     isLoadingMode,
@@ -243,7 +253,9 @@ export function TopbarTools({ compact = false }: TopbarToolsProps) {
 }
 
 interface ToolControls {
+  affinityEnabled: boolean
   handleRefresh: () => void
+  handleToggleAffinity: () => void
   handleToggleFailover: () => void
   handleToggleLoadBalancing: () => void
   isLoadingMode: boolean
@@ -311,6 +323,13 @@ function CompactTools({ controls }: { controls: ToolControls }) {
           {controls.isLoadingMode
             ? '负载均衡加载中'
             : `切换到${LB_LABEL[nextLbMode(controls.loadBalancingMode ?? 'priority')]}`}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={controls.isLoadingMode || controls.isSettingMode}
+          onSelect={controls.handleToggleAffinity}
+        >
+          <Link />
+          {controls.affinityEnabled ? '关闭客户端亲和性' : '开启客户端亲和性'}
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={controls.handleRefresh}>
           <RefreshCw />刷新数据
