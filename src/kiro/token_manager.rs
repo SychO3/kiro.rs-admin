@@ -1026,6 +1026,10 @@ pub struct MultiTokenManager {
     retry_mode: Mutex<RetryMode>,
     /// 普通 429 自定义策略（运行时可修改）
     retry_policy: Mutex<Option<RetryPolicy>>,
+    /// 客户端亲和性（client key → credential 绑定）
+    client_affinity: super::affinity::CredentialAffinity,
+    /// 亲和性开关（运行时可修改）
+    affinity_enabled: AtomicBool,
     /// 最近一次统计持久化时间（用于 debounce）
     last_stats_save_at: Mutex<Option<Instant>>,
     /// 统计数据是否有未落盘更新
@@ -1264,6 +1268,8 @@ impl MultiTokenManager {
             account_throttle_cooldown_secs: AtomicU64::new(throttle_cooldown_secs),
             retry_mode: Mutex::new(retry_mode),
             retry_policy: Mutex::new(retry_policy),
+            client_affinity: super::affinity::CredentialAffinity::default(),
+            affinity_enabled: AtomicBool::new(true),
             last_stats_save_at: Mutex::new(None),
             stats_dirty: AtomicBool::new(false),
         };
@@ -1496,6 +1502,52 @@ impl MultiTokenManager {
     ) -> anyhow::Result<CallContext> {
         self.acquire_context_excluding(model, group, &HashSet::new())
             .await
+    }
+
+    /// 带客户端亲和性的凭据获取：优先复用上次绑定的凭据
+    pub async fn acquire_context_with_affinity(
+        &self,
+        model: Option<&str>,
+        group: Option<&str>,
+        client_key_id: Option<u64>,
+        excluded_ids: &HashSet<u64>,
+    ) -> anyhow::Result<CallContext> {
+        if let Some(key_id) = client_key_id {
+            if self.affinity_enabled.load(Ordering::Relaxed) {
+                if let Some(bound_id) = self.client_affinity.get(key_id) {
+                    if !excluded_ids.contains(&bound_id) {
+                        if let Ok(ctx) = self.acquire_context_for_id(bound_id).await {
+                            self.client_affinity.touch(key_id);
+                            return Ok(ctx);
+                        }
+                    }
+                    // 绑定的凭据不可用，走正常选择
+                }
+            }
+        }
+
+        let ctx = self.acquire_context_excluding(model, group, excluded_ids).await?;
+
+        if let Some(key_id) = client_key_id {
+            if self.affinity_enabled.load(Ordering::Relaxed) {
+                self.client_affinity.set(key_id, ctx.id);
+            }
+        }
+
+        Ok(ctx)
+    }
+
+    /// 获取亲和性开关状态
+    pub fn affinity_enabled(&self) -> bool {
+        self.affinity_enabled.load(Ordering::Relaxed)
+    }
+
+    /// 设置亲和性开关
+    pub fn set_affinity_enabled(&self, enabled: bool) {
+        self.affinity_enabled.store(enabled, Ordering::Relaxed);
+        if !enabled {
+            // 关闭时不清除已有绑定，让它们自然过期
+        }
     }
 
     pub async fn acquire_context_excluding(

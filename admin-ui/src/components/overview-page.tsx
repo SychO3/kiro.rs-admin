@@ -649,9 +649,9 @@ function StatCard({
             <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{meta}</div>
           </div>
         </div>
-        <div className="ml-6 mt-4 flex min-h-[36px] items-end justify-between gap-3">
+        <div className="ml-6 mt-4 min-h-[36px]">
           <span className="min-w-0 truncate text-2xl font-semibold tracking-tight tabular-nums sm:text-3xl">{value}</span>
-          <div className="shrink-0">{extra}</div>
+          {extra && <div className="mt-1">{extra}</div>}
         </div>
       </CardContent>
     </Card>

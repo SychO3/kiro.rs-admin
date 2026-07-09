@@ -851,6 +851,7 @@ pub async fn post_messages(
             cache_usage,
             tracer,
             key_ctx.group.clone(),
+            key_ctx.key_id,
         )
         .await
     } else {
@@ -877,6 +878,7 @@ pub async fn post_messages(
             cache_usage,
             tracer,
             key_ctx.group.clone(),
+            key_ctx.key_id,
         )
         .await
     }
@@ -895,10 +897,11 @@ async fn handle_stream_request(
     cache_usage: super::cache_metering::CacheUsage,
     tracer: std::sync::Arc<RequestTracer>,
     group: Option<String>,
+    client_key_id: u64,
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let call_result = match provider
-        .call_api_stream(request_body, Some(tracer.as_ref()), group.as_deref())
+        .call_api_stream(request_body, Some(tracer.as_ref()), group.as_deref(), Some(client_key_id))
         .await
     {
         Ok(resp) => resp,
@@ -1141,10 +1144,11 @@ async fn handle_non_stream_request(
     cache_usage: super::cache_metering::CacheUsage,
     tracer: std::sync::Arc<RequestTracer>,
     group: Option<String>,
+    client_key_id: u64,
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let call_result = match provider
-        .call_api(request_body, Some(tracer.as_ref()), group.as_deref())
+        .call_api(request_body, Some(tracer.as_ref()), group.as_deref(), Some(client_key_id))
         .await
     {
         Ok(resp) => resp,
@@ -1706,6 +1710,7 @@ pub async fn post_messages_cc(
             cache_usage,
             tracer,
             key_ctx.group.clone(),
+            key_ctx.key_id,
         )
         .await
     } else {
@@ -1732,6 +1737,7 @@ pub async fn post_messages_cc(
             cache_usage,
             tracer,
             key_ctx.group.clone(),
+            key_ctx.key_id,
         )
         .await
     }
@@ -1753,10 +1759,11 @@ async fn handle_stream_request_buffered(
     cache_usage: super::cache_metering::CacheUsage,
     tracer: std::sync::Arc<RequestTracer>,
     group: Option<String>,
+    client_key_id: u64,
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let call_result = match provider
-        .call_api_stream(request_body, Some(tracer.as_ref()), group.as_deref())
+        .call_api_stream(request_body, Some(tracer.as_ref()), group.as_deref(), Some(client_key_id))
         .await
     {
         Ok(resp) => resp,

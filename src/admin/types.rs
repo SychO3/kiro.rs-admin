@@ -494,6 +494,8 @@ pub struct EnableOverageAllResult {
 pub struct LoadBalancingModeResponse {
     /// 当前模式（"priority" 或 "balanced"）
     pub mode: String,
+    /// 客户端亲和性开关
+    pub affinity_enabled: bool,
 }
 
 /// 设置负载均衡模式请求
@@ -501,7 +503,9 @@ pub struct LoadBalancingModeResponse {
 #[serde(rename_all = "camelCase")]
 pub struct SetLoadBalancingModeRequest {
     /// 模式（"priority" 或 "balanced"）
-    pub mode: String,
+    pub mode: Option<String>,
+    /// 客户端亲和性开关
+    pub affinity_enabled: Option<bool>,
 }
 
 /// 代理均衡模式响应

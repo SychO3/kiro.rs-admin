@@ -610,8 +610,9 @@ impl KiroProvider {
         request_body: &str,
         sink: Option<&dyn TraceSink>,
         group: Option<&str>,
+        client_key_id: Option<u64>,
     ) -> anyhow::Result<KiroCallResult> {
-        self.call_api_with_retry(request_body, false, sink, group)
+        self.call_api_with_retry(request_body, false, sink, group, client_key_id)
             .await
     }
 
@@ -621,8 +622,9 @@ impl KiroProvider {
         request_body: &str,
         sink: Option<&dyn TraceSink>,
         group: Option<&str>,
+        client_key_id: Option<u64>,
     ) -> anyhow::Result<KiroCallResult> {
-        self.call_api_with_retry(request_body, true, sink, group)
+        self.call_api_with_retry(request_body, true, sink, group, client_key_id)
             .await
     }
 
@@ -933,6 +935,7 @@ impl KiroProvider {
         is_stream: bool,
         sink: Option<&dyn TraceSink>,
         group: Option<&str>,
+        client_key_id: Option<u64>,
     ) -> anyhow::Result<KiroCallResult> {
         // 重试预算按当前请求所属分组的「可用」账号数计算（排除 disabled/throttled），
         // 避免删除/禁用凭据后仍按历史峰值获得过多无效重试（首字延迟阶梯增长的一环）。
@@ -953,11 +956,21 @@ impl KiroProvider {
         for attempt in 0..max_retries {
             let attempt_start = Instant::now();
             // 获取调用上下文（绑定 index、credentials、token）
-            let mut ctx = match self
-                .token_manager
-                .acquire_context_excluding(model.as_deref(), group, &request_throttled_ids)
-                .await
-            {
+            // 首次尝试使用亲和性，重试时走正常负载均衡
+            let mut ctx = match if attempt == 0 && client_key_id.is_some() {
+                self.token_manager
+                    .acquire_context_with_affinity(
+                        model.as_deref(),
+                        group,
+                        client_key_id,
+                        &request_throttled_ids,
+                    )
+                    .await
+            } else {
+                self.token_manager
+                    .acquire_context_excluding(model.as_deref(), group, &request_throttled_ids)
+                    .await
+            } {
                 Ok(c) => c,
                 Err(e) => {
                     Self::emit_attempt(

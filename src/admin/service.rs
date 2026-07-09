@@ -1954,6 +1954,7 @@ impl AdminService {
     pub fn get_load_balancing_mode(&self) -> LoadBalancingModeResponse {
         LoadBalancingModeResponse {
             mode: self.token_manager.get_load_balancing_mode(),
+            affinity_enabled: self.token_manager.affinity_enabled(),
         }
     }
 
@@ -1962,18 +1963,18 @@ impl AdminService {
         &self,
         req: SetLoadBalancingModeRequest,
     ) -> Result<LoadBalancingModeResponse, AdminServiceError> {
-        // 验证模式值
-        if req.mode != "priority" && req.mode != "balanced" && req.mode != "least_conn" {
-            return Err(AdminServiceError::InvalidCredential(
-                "mode 必须是 'priority'、'balanced' 或 'least_conn'".to_string(),
-            ));
+        if let Some(ref mode) = req.mode {
+            if mode != "priority" && mode != "balanced" && mode != "least_conn" {
+                return Err(AdminServiceError::InvalidCredential(
+                    "mode 必须是 'priority'、'balanced' 或 'least_conn'".to_string(),
+                ));
+            }
+            self.token_manager.set_load_balancing_mode(mode.clone());
         }
-
-        self.token_manager
-            .set_load_balancing_mode(req.mode.clone())
-            .map_err(|e| AdminServiceError::InternalError(e.to_string()))?;
-
-        Ok(LoadBalancingModeResponse { mode: req.mode })
+        if let Some(enabled) = req.affinity_enabled {
+            self.token_manager.set_affinity_enabled(enabled);
+        }
+        Ok(self.get_load_balancing_mode())
     }
 
     /// 获取代理均衡模式
