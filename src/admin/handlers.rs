@@ -1906,44 +1906,7 @@ pub async fn webshare_replace(
 
 /// GET /api/admin/config/system-prompt
 pub async fn get_system_prompt(State(state): State<AdminState>) -> impl IntoResponse {
-    let runtime = state.prompt_runtime.read();
-    let mut presets: Vec<super::types::PresetItem> = Vec::new();
-
-    // 内置预设
-    for p in crate::anthropic::prompt_presets::PRESETS {
-        presets.push(super::types::PresetItem {
-            id: p.id.to_string(),
-            name: p.name.to_string(),
-            description: p.description.to_string(),
-            source: "builtin".to_string(),
-            enabled: runtime.enabled_presets.iter().any(|id| id == p.id),
-            content: Some(p.content.to_string()),
-        });
-    }
-
-    // 用户预设
-    for up in &runtime.user_presets {
-        presets.push(super::types::PresetItem {
-            id: up.id.clone(),
-            name: up.name.clone(),
-            description: up.description.clone(),
-            source: "user".to_string(),
-            enabled: runtime.enabled_presets.iter().any(|id| id == &up.id),
-            content: Some(up.content.clone()),
-        });
-    }
-
-    let position_str = match runtime.position {
-        crate::model::config::SystemPromptPosition::Prepend => "prepend",
-        crate::model::config::SystemPromptPosition::Append => "append",
-    };
-
-    Json(super::types::SystemPromptResponse {
-        enabled: runtime.enabled,
-        position: position_str.to_string(),
-        custom_content: runtime.custom_content.clone(),
-        presets,
-    })
+    build_system_prompt_response(&state)
 }
 
 /// PUT /api/admin/config/system-prompt
@@ -1999,7 +1962,42 @@ pub async fn update_system_prompt(
         }
     });
 
-    Json(super::types::SuccessResponse::new("系统提示配置已更新"))
+    build_system_prompt_response(&state)
+}
+
+fn build_system_prompt_response(state: &AdminState) -> Json<super::types::SystemPromptResponse> {
+    let runtime = state.prompt_runtime.read();
+    let mut presets: Vec<super::types::PresetItem> = Vec::new();
+    for p in crate::anthropic::prompt_presets::PRESETS {
+        presets.push(super::types::PresetItem {
+            id: p.id.to_string(),
+            name: p.name.to_string(),
+            description: p.description.to_string(),
+            source: "builtin".to_string(),
+            enabled: runtime.enabled_presets.iter().any(|id| id == p.id),
+            content: Some(p.content.to_string()),
+        });
+    }
+    for up in &runtime.user_presets {
+        presets.push(super::types::PresetItem {
+            id: up.id.clone(),
+            name: up.name.clone(),
+            description: up.description.clone(),
+            source: "user".to_string(),
+            enabled: runtime.enabled_presets.iter().any(|id| id == &up.id),
+            content: Some(up.content.clone()),
+        });
+    }
+    let position_str = match runtime.position {
+        crate::model::config::SystemPromptPosition::Prepend => "prepend",
+        crate::model::config::SystemPromptPosition::Append => "append",
+    };
+    Json(super::types::SystemPromptResponse {
+        enabled: runtime.enabled,
+        position: position_str.to_string(),
+        custom_content: runtime.custom_content.clone(),
+        presets,
+    })
 }
 
 /// POST /api/admin/config/user-presets
@@ -2034,7 +2032,7 @@ pub async fn upsert_user_preset(
         }
     });
 
-    Json(super::types::SuccessResponse::new("用户预设已保存"))
+    build_system_prompt_response(&state)
 }
 
 /// DELETE /api/admin/config/user-presets/{id}
@@ -2056,7 +2054,7 @@ pub async fn delete_user_preset(
         c.enabled_presets.retain(|pid| pid != &id_clone);
     });
 
-    Json(super::types::SuccessResponse::new("用户预设已删除"))
+    build_system_prompt_response(&state)
 }
 
 /// GET /api/admin/config/prompt-filter
