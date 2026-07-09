@@ -214,7 +214,8 @@ function TokenCell({ rec }: { rec: TraceRecord }) {
     return <span className="text-muted-foreground">—</span>
   }
   const cacheTotal = cacheCreation + cacheRead
-  const cachePercent = total > 0 ? Math.round((cacheTotal / total) * 100) : 0
+  const inputTotal = input + cacheCreation + cacheRead
+  const cachePercent = inputTotal > 0 ? Math.round((cacheRead / inputTotal) * 100) : 0
   const rows: Array<[string, number]> = [
     ['输入 Token', input],
     ['输出 Token', output],
