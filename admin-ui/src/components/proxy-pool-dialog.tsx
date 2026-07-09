@@ -725,25 +725,23 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
                       <Button
                         size="sm"
                         variant="outline"
-                        className="h-7 text-xs"
+                        className="h-7 w-7 p-0"
                         onClick={() => handleCheckOne(proxy)}
                         disabled={isChecking}
                         title="测试此代理连通性"
                       >
-                        <Activity className="h-3 w-3 mr-1" />
-                        {isChecking ? '...' : '测试'}
+                        <Activity className="h-3 w-3" />
                       </Button>
                       {proxy.label?.startsWith('WS-') && (
                         <Button
                           size="sm"
                           variant="outline"
-                          className="h-7 text-xs"
+                          className="h-7 w-7 p-0"
                           onClick={() => webshareReplaceMutation.mutate(proxy.id)}
                           disabled={replacingId === proxy.id}
                           title="通过 Webshare API 替换此代理 IP"
                         >
-                          <RefreshCw className={`h-3 w-3 mr-1 ${replacingId === proxy.id ? 'animate-spin' : ''}`} />
-                          {replacingId === proxy.id ? '换中...' : '换 IP'}
+                          <RefreshCw className={`h-3 w-3 ${replacingId === proxy.id ? 'animate-spin' : ''}`} />
                         </Button>
                       )}
                       {onSelectProxy && proxy.enabled && (

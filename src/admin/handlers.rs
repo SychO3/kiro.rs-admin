@@ -1862,14 +1862,48 @@ pub async fn webshare_replace(
         )
             .into_response();
     };
+
+    let old_url = state
+        .service
+        .proxy_pool()
+        .list()
+        .iter()
+        .find(|e| e.id == proxy_id)
+        .map(|e| e.url.clone());
+
     let client = crate::admin::webshare::WebshareClient::new(token.clone());
     match crate::admin::webshare::replace_and_sync(&client, state.service.proxy_pool(), proxy_id).await {
-        Ok(r) => Json(serde_json::json!({
-            "message": "替换完成",
-            "added": r.added,
-            "removed": r.removed,
-        }))
-        .into_response(),
+        Ok(r) => {
+            if let Some(old) = old_url {
+                if let Some(global) = state.service.get_global_proxy() {
+                    if global.contains(&old) {
+                        let new_entries: Vec<String> = state
+                            .service
+                            .proxy_pool()
+                            .list()
+                            .iter()
+                            .filter(|e| e.label.as_deref().map(|l| l.starts_with("WS-")).unwrap_or(false))
+                            .map(|e| e.url.clone())
+                            .collect();
+                        if !new_entries.is_empty() {
+                            let updated = global
+                                .split('\n')
+                                .filter(|line| line.trim() != old.trim())
+                                .chain(new_entries.iter().filter(|u| !global.contains(u.as_str())).map(|s| s.as_str()))
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            let _ = state.service.set_global_proxy(Some(updated));
+                        }
+                    }
+                }
+            }
+            Json(serde_json::json!({
+                "message": "替换完成",
+                "added": r.added,
+                "removed": r.removed,
+            }))
+            .into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),

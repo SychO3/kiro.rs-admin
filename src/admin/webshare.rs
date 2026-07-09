@@ -4,6 +4,7 @@
 //! 支持风控触发时通过 Replace API 自动替换 IP。
 
 use super::proxy_pool::ProxyPoolManager;
+use crate::kiro::token_manager::MultiTokenManager;
 use reqwest::Client;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -208,15 +209,54 @@ fn extract_ip_from_url(url: &str) -> Option<String> {
     Some(host.to_string())
 }
 
+/// 替换后更新全局代理：把旧 URL 替换为池中当前的 WS- 代理
+pub fn update_global_proxy_after_replace(
+    tm: &MultiTokenManager,
+    pool: &ProxyPoolManager,
+    old_url: &str,
+) {
+    use crate::http_client::ProxyConfig;
+
+    let Some(global) = tm.proxy() else { return };
+    if !global.url.contains(old_url) {
+        return;
+    }
+    let new_ws_urls: Vec<String> = pool
+        .list()
+        .iter()
+        .filter(|e| e.label.as_deref().map(|l| l.starts_with("WS-")).unwrap_or(false))
+        .map(|e| e.url.clone())
+        .collect();
+    if new_ws_urls.is_empty() {
+        return;
+    }
+    let updated: Vec<&str> = global
+        .url
+        .split('\n')
+        .filter(|line| line.trim() != old_url.trim())
+        .chain(
+            new_ws_urls
+                .iter()
+                .filter(|u| !global.url.contains(u.as_str()))
+                .map(|s| s.as_str()),
+        )
+        .collect();
+    let joined = updated.join("\n");
+    tm.set_global_proxy(Some(ProxyConfig::new(&joined)));
+    tracing::info!("全局代理已更新（替换旧 URL）");
+}
+
 /// 后台定时同步任务
 pub fn spawn_background_sync(
     api_token: String,
     interval_secs: u64,
     pool: Arc<ProxyPoolManager>,
     auto_replace: bool,
+    token_manager: Arc<MultiTokenManager>,
 ) {
     let token_clone = api_token.clone();
     let pool_clone = pool.clone();
+    let tm_clone = token_manager.clone();
 
     // 定时同步 task
     tokio::spawn(async move {
@@ -254,7 +294,7 @@ pub fn spawn_background_sync(
         tokio::spawn(async move {
             let client = WebshareClient::new(token_clone);
             while let Some(event) = rx.recv().await {
-                let is_webshare = event.url.contains("@"); // Webshare 代理有 user:pass@host 格式
+                let is_webshare = event.url.contains("@");
                 let label_match = pool_clone
                     .list()
                     .iter()
@@ -265,16 +305,20 @@ pub fn spawn_background_sync(
                 if !is_webshare || !label_match {
                     continue;
                 }
+                let old_url = event.url.clone();
                 tracing::info!(
                     proxy_id = event.proxy_id,
                     url = %event.url,
                     "代理被自动禁用，触发 Webshare 自动替换"
                 );
                 match replace_and_sync(&client, &pool_clone, event.proxy_id).await {
-                    Ok(r) => tracing::info!(
-                        "Webshare 自动替换完成：新增 {}，删除 {}",
-                        r.added, r.removed
-                    ),
+                    Ok(r) => {
+                        tracing::info!(
+                            "Webshare 自动替换完成：新增 {}，删除 {}",
+                            r.added, r.removed
+                        );
+                        update_global_proxy_after_replace(&tm_clone, &pool_clone, &old_url);
+                    }
                     Err(e) => tracing::error!("Webshare 自动替换失败：{}", e),
                 }
             }
