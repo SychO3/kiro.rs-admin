@@ -2603,6 +2603,10 @@ impl BufferedStreamContext {
         )
     }
 
+    pub fn model(&self) -> &str {
+        &self.inner.model
+    }
+
     /// 工具调用 JSON 错误信息（转发内部 StreamContext）。缓冲流据此记 error。
     pub fn tool_json_error_message(&self) -> Option<String> {
         self.inner.tool_json_error_message()

@@ -76,6 +76,13 @@ impl UsageRecordHook {
         credits: f64,
         status: &str,
     ) {
+        let cost = crate::token::calculate_cost(
+            &self.model,
+            input_tokens.max(0) as u64,
+            output_tokens.max(0) as u64,
+            cache_creation_tokens.max(0) as u64,
+            cache_read_tokens.max(0) as u64,
+        );
         let rec = UsageRecord {
             ts: Utc::now().to_rfc3339(),
             key_id: self.key_id,
@@ -90,6 +97,7 @@ impl UsageRecordHook {
             } else {
                 0.0
             },
+            cost,
             duration_ms: self.started_at.elapsed().as_millis() as u64,
             status: status.to_string(),
         };
@@ -108,6 +116,7 @@ impl UsageRecordHook {
                     rec.cache_creation_tokens,
                     rec.cache_read_tokens,
                     rec.credits,
+                    rec.cost,
                 );
             }
         }
@@ -143,6 +152,7 @@ pub(crate) struct TraceUsage {
     pub cache_creation_tokens: u64,
     pub cache_read_tokens: u64,
     pub credits: f64,
+    pub cost: f64,
 }
 
 impl TraceUsage {
@@ -218,6 +228,7 @@ impl RequestTracer {
             cache_creation_tokens: usage.cache_creation_tokens,
             cache_read_tokens: usage.cache_read_tokens,
             credits: usage.credits,
+            cost: usage.cost,
             first_token_ms,
             attempts,
         };
@@ -1074,6 +1085,13 @@ fn record_stream_usage(
 /// 从 StreamContext 提取用量，转成 trace 行用量（与 record_stream_usage 同源）
 fn stream_trace_usage(ctx: &StreamContext) -> TraceUsage {
     let (input, cache_creation, cache_read) = ctx.resolved_usage();
+    let cost = crate::token::calculate_cost(
+        &ctx.model,
+        input.max(0) as u64,
+        ctx.output_tokens.max(0) as u64,
+        cache_creation.max(0) as u64,
+        cache_read.max(0) as u64,
+    );
     TraceUsage {
         input_tokens: input.max(0) as u64,
         output_tokens: ctx.output_tokens.max(0) as u64,
@@ -1084,6 +1102,7 @@ fn stream_trace_usage(ctx: &StreamContext) -> TraceUsage {
         } else {
             0.0
         },
+        cost,
     }
 }
 
@@ -1345,6 +1364,13 @@ async fn handle_non_stream_request(
             } else {
                 0.0
             },
+            cost: crate::token::calculate_cost(
+                model,
+                final_input_tokens.max(0) as u64,
+                output_tokens.max(0) as u64,
+                cache_creation_tokens.max(0) as u64,
+                cache_read_tokens.max(0) as u64,
+            ),
         },
     );
     (StatusCode::OK, Json(response_body)).into_response()
@@ -1835,6 +1861,13 @@ fn create_buffered_sse_stream(
                                         cache_creation_tokens: cc.max(0) as u64,
                                         cache_read_tokens: cr.max(0) as u64,
                                         credits: if credits.is_finite() && credits > 0.0 { credits } else { 0.0 },
+                                        cost: crate::token::calculate_cost(
+                                            ctx.model(),
+                                            i.max(0) as u64,
+                                            o.max(0) as u64,
+                                            cc.max(0) as u64,
+                                            cr.max(0) as u64,
+                                        ),
                                     },
                                 );
                                 let bytes: Vec<Result<Bytes, Infallible>> = all_events
@@ -1855,6 +1888,13 @@ fn create_buffered_sse_stream(
                                     cache_creation_tokens: cc.max(0) as u64,
                                     cache_read_tokens: cr.max(0) as u64,
                                     credits: if credits.is_finite() && credits > 0.0 { credits } else { 0.0 },
+                                    cost: crate::token::calculate_cost(
+                                        ctx.model(),
+                                        i.max(0) as u64,
+                                        o.max(0) as u64,
+                                        cc.max(0) as u64,
+                                        cr.max(0) as u64,
+                                    ),
                                 };
                                 if let Some(message) = ctx.tool_json_error_message() {
                                     hook.record(credential_id, i, o, cc, cr, credits, "error");

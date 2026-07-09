@@ -13,6 +13,54 @@ use std::sync::OnceLock;
 /// Claude 模型相对 cl100k_base 的修正系数
 const CLAUDE_CORRECTION_FACTOR: f64 = 1.15;
 
+/// 根据模型和 token 用量按官方定价计算费用（USD）
+pub fn calculate_cost(
+    model: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_creation_tokens: u64,
+    cache_read_tokens: u64,
+) -> f64 {
+    let model_id = normalize_pricing_model(model);
+    let Some(m) = tiktoken::pricing::get_model(&model_id) else {
+        return 0.0;
+    };
+    let pricing = m.pricing_for_input(input_tokens + cache_creation_tokens + cache_read_tokens);
+    let input_cost = input_tokens as f64 * pricing.input_per_1m / 1_000_000.0;
+    let output_cost = output_tokens as f64 * pricing.output_per_1m / 1_000_000.0;
+    let cache_read_cost = match pricing.cached_input_per_1m {
+        Some(rate) => cache_read_tokens as f64 * rate / 1_000_000.0,
+        None => cache_read_tokens as f64 * pricing.input_per_1m / 1_000_000.0,
+    };
+    // cache creation = input price × 1.25 (Anthropic convention)
+    let cache_creation_cost = cache_creation_tokens as f64 * pricing.input_per_1m * 1.25 / 1_000_000.0;
+    input_cost + output_cost + cache_read_cost + cache_creation_cost
+}
+
+/// 将项目内部模型名映射到 tiktoken pricing 能识别的 ID
+fn normalize_pricing_model(model: &str) -> String {
+    let m = model.replace("-thinking", "");
+    // tiktoken pricing 使用点号格式如 "claude-opus-4-6"
+    // 项目内部可能用横杠如 "claude-opus-4-6"
+    // 规则：最后一段横杠分隔的数字部分，把横杠替换为点号
+    // claude-opus-4-6 → claude-opus-4-6
+    // claude-haiku-4-5 → claude-haiku-4.5
+    if let Some(pos) = m.rfind('-') {
+        let suffix = &m[pos + 1..];
+        if suffix.chars().all(|c| c.is_ascii_digit()) && suffix.len() <= 2 {
+            let prefix = &m[..pos];
+            if let Some(pos2) = prefix.rfind('-') {
+                let mid = &prefix[pos2 + 1..];
+                if mid.chars().all(|c| c.is_ascii_digit()) {
+                    return format!("{}{}.{}", &prefix[..pos2 + 1], mid, suffix);
+                }
+            }
+        }
+    }
+    // claude-sonnet-5 等没有次版本号的，或者非 Claude 模型直接透传
+    m
+}
+
 /// Count Tokens API 配置
 #[derive(Clone, Default)]
 pub struct CountTokensConfig {
@@ -200,5 +248,26 @@ mod tests {
             "text": ""
         })]);
         assert!(with_thinking > text_only);
+    }
+
+    #[test]
+    fn calculate_cost_opus_46() {
+        // claude-opus-4-6: input $5/M, output $25/M, cache_read $0.5/M
+        let cost = calculate_cost("claude-opus-4-6", 1_000_000, 0, 0, 0);
+        assert!((cost - 5.0).abs() < 0.01, "input cost: {cost}");
+        let cost = calculate_cost("claude-opus-4-6", 0, 1_000_000, 0, 0);
+        assert!((cost - 25.0).abs() < 0.01, "output cost: {cost}");
+        let cost = calculate_cost("claude-opus-4-6", 0, 0, 0, 1_000_000);
+        assert!((cost - 0.5).abs() < 0.01, "cache read cost: {cost}");
+    }
+
+    #[test]
+    fn normalize_model_names() {
+        assert_eq!(normalize_pricing_model("claude-opus-4-6"), "claude-opus-4.6");
+        assert_eq!(normalize_pricing_model("claude-opus-4.6"), "claude-opus-4.6");
+        assert_eq!(normalize_pricing_model("claude-haiku-4-5"), "claude-haiku-4.5");
+        assert_eq!(normalize_pricing_model("claude-sonnet-4"), "claude-sonnet-4");
+        assert_eq!(normalize_pricing_model("claude-opus-4-6-thinking"), "claude-opus-4.6");
+        assert_eq!(normalize_pricing_model("deepseek-3.2"), "deepseek-3.2");
     }
 }

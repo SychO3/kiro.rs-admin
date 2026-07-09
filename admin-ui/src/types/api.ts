@@ -461,10 +461,12 @@ export interface OverviewStats {
   todayOutputTokens: number
   todayErrors: number
   todayCredits: number
+  todayCost: number
   weekCalls: number
   weekInputTokens: number
   weekOutputTokens: number
   weekCredits: number
+  weekCost: number
   activeClientKeys: number
   activeCredentials: number
 }
@@ -478,6 +480,7 @@ export interface TimeSeriesPoint {
   calls: number
   errors: number
   credits: number
+  cost: number
 }
 
 export interface ModelDistribution {
@@ -546,6 +549,8 @@ export interface TraceRecord {
   totalTokens?: number
   /** 费用（credits） */
   credits?: number
+  /** 按官方定价计算的 USD 费用 */
+  cost?: number
   /** 首 Token 延迟（毫秒，仅流式有值） */
   firstTokenMs?: number | null
   attempts: TraceAttempt[]

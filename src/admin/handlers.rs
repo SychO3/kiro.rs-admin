@@ -1523,6 +1523,7 @@ pub async fn list_traces(
                 "cacheReadTokens": r.cache_read_tokens,
                 "totalTokens": r.input_tokens + r.output_tokens + r.cache_creation_tokens + r.cache_read_tokens,
                 "credits": r.credits,
+                "cost": r.cost,
                 "firstTokenMs": r.first_token_ms,
                 "attempts": attempts,
             })

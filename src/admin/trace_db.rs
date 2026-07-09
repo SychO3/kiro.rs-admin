@@ -122,6 +122,9 @@ pub struct TraceRecord {
     /// 费用（上游 meteringEvent 累计的 credits）
     #[serde(default)]
     pub credits: f64,
+    /// 按官方定价计算的 USD 费用
+    #[serde(default)]
+    pub cost: f64,
     /// 首 Token 延迟（毫秒，仅流式有值；非流式为 None）
     #[serde(default)]
     pub first_token_ms: Option<u64>,
@@ -254,12 +257,13 @@ impl TraceStore {
         // (列名, 定义) —— 与 SCHEMA 中新增列保持一致
         // 注意 key_source 不带 NOT NULL：老库已有行需先以 NULL 添加再回填（SQLite ALTER ADD COLUMN
         // NOT NULL 不带常量 DEFAULT 时无法对已有行赋值）。新插入永远写入合法值。
-        let columns: [(&str, &str); 7] = [
+        let columns: [(&str, &str); 8] = [
             ("input_tokens", "INTEGER NOT NULL DEFAULT 0"),
             ("output_tokens", "INTEGER NOT NULL DEFAULT 0"),
             ("cache_creation_tokens", "INTEGER NOT NULL DEFAULT 0"),
             ("cache_read_tokens", "INTEGER NOT NULL DEFAULT 0"),
             ("credits", "REAL NOT NULL DEFAULT 0"),
+            ("cost", "REAL NOT NULL DEFAULT 0"),
             ("first_token_ms", "INTEGER"),
             ("key_source", "TEXT"),
         ];
@@ -323,8 +327,8 @@ impl TraceStore {
                  is_stream, final_status, final_credential_id, error_type, error_message, \
                  total_attempts, duration_ms, interrupted_after_bytes, \
                  input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, \
-                 credits, first_token_ms) \
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
+                 credits, cost, first_token_ms) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",
                 rusqlite::params![
                     rec.trace_id,
                     rec.ts,
@@ -345,6 +349,7 @@ impl TraceStore {
                     rec.cache_creation_tokens as i64,
                     rec.cache_read_tokens as i64,
                     rec.credits,
+                    rec.cost,
                     rec.first_token_ms.map(|v| v as i64),
                 ],
             )?;
@@ -482,7 +487,7 @@ impl TraceStore {
         let sql = format!(
             "SELECT trace_id, ts, key_id, key_source, model, is_stream, final_status, final_credential_id, \
              error_type, error_message, total_attempts, duration_ms, interrupted_after_bytes, \
-             input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, credits, first_token_ms \
+             input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, credits, cost, first_token_ms \
              FROM traces {} ORDER BY ts_epoch DESC LIMIT {} OFFSET {}",
             where_sql, limit, q.offset
         );
@@ -508,7 +513,8 @@ impl TraceStore {
                 cache_creation_tokens: row.get::<_, i64>(15)? as u64,
                 cache_read_tokens: row.get::<_, i64>(16)? as u64,
                 credits: row.get::<_, f64>(17)?,
-                first_token_ms: row.get::<_, Option<i64>>(18)?.map(|v| v as u64),
+                cost: row.get::<_, f64>(18)?,
+                first_token_ms: row.get::<_, Option<i64>>(19)?.map(|v| v as u64),
                 attempts: Vec::new(),
             })
         })?;
@@ -721,6 +727,7 @@ CREATE TABLE IF NOT EXISTS traces (
     cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
     cache_read_tokens INTEGER NOT NULL DEFAULT 0,
     credits           REAL NOT NULL DEFAULT 0,
+    cost              REAL NOT NULL DEFAULT 0,
     first_token_ms    INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_traces_ts ON traces(ts_epoch DESC);
@@ -780,6 +787,7 @@ mod tests {
             cache_creation_tokens: 0,
             cache_read_tokens: 101760,
             credits: 0.0,
+            cost: 0.0,
             first_token_ms: None,
             attempts: vec![
                 TraceAttempt {

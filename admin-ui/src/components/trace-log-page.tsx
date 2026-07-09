@@ -256,6 +256,28 @@ function TokenCell({ rec }: { rec: TraceRecord }) {
   )
 }
 
+function CostCell({ rec }: { rec: TraceRecord }) {
+  const credits = rec.credits ?? 0
+  const cost = rec.cost ?? 0
+  if (credits === 0 && cost === 0) {
+    return <span className="text-muted-foreground">—</span>
+  }
+  return (
+    <div className="flex flex-col gap-0 leading-tight">
+      {cost > 0 && (
+        <span className="inline-flex items-center gap-0.5 text-[12px] font-mono text-amber-600 dark:text-amber-400">
+          <span className="text-[10px]">$</span>{cost < 0.0001 ? cost.toExponential(1) : cost.toFixed(4)}
+        </span>
+      )}
+      {credits > 0 && (
+        <span className="inline-flex items-center gap-0.5 text-[10px] font-mono text-sky-600 dark:text-sky-400">
+          <span className="text-[9px]">⚡</span>{credits.toFixed(4)}
+        </span>
+      )}
+    </div>
+  )
+}
+
 function TraceRow({ rec }: { rec: TraceRecord }) {
   const [open, setOpen] = useState(false)
   const errStyle = rec.errorType ? outcomeStyle(rec.errorType) : null
@@ -289,8 +311,8 @@ function TraceRow({ rec }: { rec: TraceRecord }) {
         <td className="py-2.5 pr-3 text-[12px] tabular-nums">
           <TokenCell rec={rec} />
         </td>
-        <td className="py-2.5 pr-3 text-[13px] tabular-nums">
-          {rec.credits != null && rec.credits > 0 ? rec.credits.toFixed(4) : '—'}
+        <td className="py-2.5 pr-3 tabular-nums">
+          <CostCell rec={rec} />
         </td>
         <td className="py-2.5 pr-3 text-[13px] tabular-nums text-muted-foreground">
           {rec.firstTokenMs != null ? formatDuration(rec.firstTokenMs) : '—'}

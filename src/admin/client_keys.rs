@@ -49,6 +49,9 @@ pub struct ClientKey {
     /// 累计 credit 计费量（meteringEvent.usage 累加）
     #[serde(default)]
     pub total_credits: f64,
+    /// 累计按官方定价计算的 USD 费用
+    #[serde(default)]
+    pub total_cost: f64,
     /// 绑定的账号分组名（可选）
     ///
     /// 设置后，用该 Key 发起的请求只会调度到 groups 包含此分组名的上游账号（严格隔离）。
@@ -193,6 +196,7 @@ impl ClientKeyManager {
             total_cache_creation_tokens: 0,
             total_cache_read_tokens: 0,
             total_credits: 0.0,
+            total_cost: 0.0,
             group: group.filter(|g| !g.trim().is_empty()),
             is_system: false,
         };
@@ -266,6 +270,7 @@ impl ClientKeyManager {
                     total_cache_creation_tokens: 0,
                     total_cache_read_tokens: 0,
                     total_credits: 0.0,
+                    total_cost: 0.0,
                     group: None,
                     is_system: true,
                 };
@@ -446,6 +451,7 @@ impl ClientKeyManager {
                 e.total_cache_creation_tokens = 0;
                 e.total_cache_read_tokens = 0;
                 e.total_credits = 0.0;
+                e.total_cost = 0.0;
                 true
             }
             None => false,
@@ -494,6 +500,7 @@ impl ClientKeyManager {
         cache_creation_tokens: u64,
         cache_read_tokens: u64,
         credits: f64,
+        cost: f64,
     ) {
         let mut inner = self.inner.write();
         if let Some(entry) = inner.entries.get_mut(&id) {
@@ -503,6 +510,9 @@ impl ClientKeyManager {
             entry.total_cache_read_tokens += cache_read_tokens;
             if credits.is_finite() && credits > 0.0 {
                 entry.total_credits += credits;
+            }
+            if cost.is_finite() && cost > 0.0 {
+                entry.total_cost += cost;
             }
             entry.last_used_at = Some(Utc::now().to_rfc3339());
         }
@@ -587,8 +597,8 @@ mod tests {
     fn record_usage_accumulates() {
         let mgr = ClientKeyManager::new();
         let entry = mgr.create("test".to_string(), None, None);
-        mgr.record_usage(entry.id, 100, 50, 0, 0, 0.0);
-        mgr.record_usage(entry.id, 200, 30, 5, 10, 1.5);
+        mgr.record_usage(entry.id, 100, 50, 0, 0, 0.0, 0.0);
+        mgr.record_usage(entry.id, 200, 30, 5, 10, 1.5, 0.05);
         let list = mgr.list();
         let e = list.iter().find(|x| x.id == entry.id).unwrap();
         assert_eq!(e.total_input_tokens, 300);
@@ -608,7 +618,7 @@ mod tests {
         let mgr = ClientKeyManager::new();
         let entry = mgr.create("kb".to_string(), Some("desc".into()), Some("groupA".into()));
         // 累计一些统计
-        mgr.record_usage(entry.id, 100, 50, 5, 10, 1.5);
+        mgr.record_usage(entry.id, 100, 50, 5, 10, 1.5, 0.05);
         let old_key = entry.key.clone();
         let rotated = mgr.rotate(entry.id).expect("rotate should succeed");
         // 新 Key 与旧 Key 不同、且仍带前缀

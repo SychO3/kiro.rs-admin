@@ -44,6 +44,9 @@ pub struct UsageRecord {
     /// 上游 meteringEvent.usage 上报的 credit 计费量（浮点）
     #[serde(default)]
     pub credits: f64,
+    /// 按官方定价计算的 USD 费用
+    #[serde(default)]
+    pub cost: f64,
     /// 端到端耗时（毫秒）
     #[serde(default)]
     pub duration_ms: u64,
@@ -180,6 +183,7 @@ pub struct BucketStats {
     pub calls: u64,
     pub errors: u64,
     pub credits: f64,
+    pub cost: f64,
 }
 
 impl BucketStats {
@@ -189,6 +193,7 @@ impl BucketStats {
         self.cache_creation_tokens += rec.cache_creation_tokens;
         self.cache_read_tokens += rec.cache_read_tokens;
         self.credits += rec.credits;
+        self.cost += rec.cost;
         self.calls += 1;
         if rec.status != "success" {
             self.errors += 1;
@@ -202,6 +207,7 @@ impl BucketStats {
         self.cache_creation_tokens += other.cache_creation_tokens;
         self.cache_read_tokens += other.cache_read_tokens;
         self.credits += other.credits;
+        self.cost += other.cost;
         self.calls += other.calls;
         self.errors += other.errors;
     }
@@ -303,6 +309,7 @@ pub struct TimeSeriesPoint {
     pub calls: u64,
     pub errors: u64,
     pub credits: f64,
+    pub cost: f64,
 }
 
 /// 模型分布
@@ -336,11 +343,13 @@ pub struct OverviewStats {
     pub today_output_tokens: u64,
     pub today_errors: u64,
     pub today_credits: f64,
+    pub today_cost: f64,
     /// 最近 7 天累计
     pub week_calls: u64,
     pub week_input_tokens: u64,
     pub week_output_tokens: u64,
     pub week_credits: f64,
+    pub week_cost: f64,
 }
 
 impl UsageAggregator {
@@ -469,6 +478,7 @@ impl UsageAggregator {
                     calls: stats.calls,
                     errors: stats.errors,
                     credits: stats.credits,
+                    cost: stats.cost,
                 }
             })
             .collect();
@@ -573,6 +583,7 @@ impl UsageAggregator {
             today.calls += b.overall.calls;
             today.errors += b.overall.errors;
             today.credits += b.overall.credits;
+            today.cost += b.overall.cost;
         }
 
         let week_cutoff = Utc::now().timestamp() - 7 * 24 * 3600;
@@ -582,6 +593,7 @@ impl UsageAggregator {
             week.output_tokens += b.overall.output_tokens;
             week.calls += b.overall.calls;
             week.credits += b.overall.credits;
+            week.cost += b.overall.cost;
         }
 
         OverviewStats {
@@ -590,10 +602,12 @@ impl UsageAggregator {
             today_output_tokens: today.output_tokens,
             today_errors: today.errors,
             today_credits: today.credits,
+            today_cost: today.cost,
             week_calls: week.calls,
             week_input_tokens: week.input_tokens,
             week_output_tokens: week.output_tokens,
             week_credits: week.credits,
+            week_cost: week.cost,
         }
     }
 }
@@ -731,6 +745,7 @@ mod tests {
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
             credits: 0.05,
+            cost: 0.0,
             duration_ms: 1500,
             status: "success".to_string(),
         };
@@ -769,6 +784,7 @@ mod tests {
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
             credits: 0.01,
+            cost: 0.0,
             duration_ms: 100,
             status: "success".to_string(),
         };
@@ -782,6 +798,7 @@ mod tests {
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
             credits: 0.02,
+            cost: 0.0,
             duration_ms: 200,
             status: "error".to_string(),
         };
@@ -836,6 +853,7 @@ mod tests {
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
             credits: 0.01,
+            cost: 0.0,
             duration_ms: 100,
             status: "success".to_string(),
         };
@@ -849,6 +867,7 @@ mod tests {
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
             credits: 0.02,
+            cost: 0.0,
             duration_ms: 100,
             status: "success".to_string(),
         };
@@ -898,6 +917,7 @@ mod tests {
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
             credits: 0.0,
+            cost: 0.0,
             duration_ms: 100,
             status: "error".to_string(),
         };
