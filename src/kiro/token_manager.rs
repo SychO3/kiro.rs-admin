@@ -631,11 +631,12 @@ pub(crate) async fn get_available_models(
 
         let body_text = response.text().await.unwrap_or_default();
 
-        // 403 且仍有备用端点时，尝试下一个区域端点（Enterprise/IdC 跨区兼容）
-        if status.as_u16() == 403 && idx + 1 < candidates.len() {
+        // 403/400 且仍有备用端点时，尝试下一个区域端点（Enterprise/IdC 跨区兼容）
+        if (status.as_u16() == 403 || status.as_u16() == 400) && idx + 1 < candidates.len() {
             tracing::debug!(
-                "ListAvailableModels 在 {} 返回 403，尝试备用端点 {}",
+                "ListAvailableModels 在 {} 返回 {}，尝试备用端点 {}",
                 region,
+                status,
                 candidates[idx + 1]
             );
             last_error = Some(format!("{} {}", status, body_text));
