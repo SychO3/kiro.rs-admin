@@ -286,6 +286,18 @@ pub struct Config {
     #[serde(default = "default_proxy_balancing_mode")]
     pub proxy_balancing_mode: String,
 
+    /// Webshare API Token（配置后启用代理自动同步）
+    #[serde(default)]
+    pub webshare_api_token: Option<String>,
+
+    /// Webshare 同步间隔（秒，默认 300）
+    #[serde(default = "default_webshare_sync_interval")]
+    pub webshare_sync_interval_secs: u64,
+
+    /// Webshare 风控/模型不可用时自动替换代理（默认 true）
+    #[serde(default = "default_true")]
+    pub webshare_auto_replace: bool,
+
     /// 账号级 429 风控触发时是否对当前凭据进入冷却并故障转移（默认 true）。
     ///
     /// 关闭后：429 + suspicious activity 仍按普通瞬态错误重试，不切换凭据。
@@ -391,6 +403,14 @@ fn default_proxy_balancing_mode() -> String {
     "sticky".to_string()
 }
 
+fn default_webshare_sync_interval() -> u64 {
+    300
+}
+
+fn default_true() -> bool {
+    true
+}
+
 fn default_account_throttle_failover() -> bool {
     true
 }
@@ -459,6 +479,9 @@ impl Default for Config {
             update_auto_apply_time: default_update_auto_apply_time(),
             load_balancing_mode: default_load_balancing_mode(),
             proxy_balancing_mode: default_proxy_balancing_mode(),
+            webshare_api_token: None,
+            webshare_sync_interval_secs: default_webshare_sync_interval(),
+            webshare_auto_replace: default_true(),
             account_throttle_failover: default_account_throttle_failover(),
             account_throttle_cooldown_secs: default_account_throttle_cooldown_secs(),
             retry_mode: default_retry_mode(),

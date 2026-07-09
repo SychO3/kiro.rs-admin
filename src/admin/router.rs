@@ -28,6 +28,7 @@ use super::{
         start_social_relogin, stats_by_credential, stats_by_model, stats_overview,
         stats_timeseries, test_credential_response, trace_failure_stats, update_admin_key,
         update_client_key, update_credential, update_group, update_refresh_token,
+        webshare_replace, webshare_sync,
     },
     middleware::{AdminState, admin_auth_middleware},
 };
@@ -93,6 +94,8 @@ pub fn create_admin_router(state: AdminState) -> Router {
         .route("/proxy-pool/{id}", delete(delete_proxy))
         .route("/proxy-pool/{id}/enabled", post(set_proxy_enabled))
         .route("/proxy-pool/{id}/check", post(check_proxy))
+        .route("/proxy-pool/webshare/sync", post(webshare_sync))
+        .route("/proxy-pool/webshare/replace/{id}", post(webshare_replace))
         .route(
             "/config/load-balancing",
             get(get_load_balancing_mode).put(set_load_balancing_mode),

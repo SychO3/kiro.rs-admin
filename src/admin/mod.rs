@@ -24,6 +24,7 @@ mod handlers;
 mod middleware;
 pub mod model_mapping;
 pub mod proxy_pool;
+pub mod webshare;
 mod router;
 mod service;
 pub mod trace_db;

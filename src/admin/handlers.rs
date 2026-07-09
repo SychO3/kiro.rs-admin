@@ -1822,3 +1822,58 @@ pub async fn delete_group(
     )))
     .into_response()
 }
+
+// ─── Webshare 代理同步 ───
+
+pub async fn webshare_sync(State(state): State<AdminState>) -> impl IntoResponse {
+    let config = state.service.token_manager().config();
+    let Some(token) = &config.webshare_api_token else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "未配置 webshare_api_token"})),
+        )
+            .into_response();
+    };
+    let client = crate::admin::webshare::WebshareClient::new(token.clone());
+    match crate::admin::webshare::sync_to_pool(&client, state.service.proxy_pool()).await {
+        Ok(r) => Json(serde_json::json!({
+            "added": r.added,
+            "removed": r.removed,
+            "unchanged": r.unchanged,
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn webshare_replace(
+    State(state): State<AdminState>,
+    Path(proxy_id): Path<u64>,
+) -> impl IntoResponse {
+    let config = state.service.token_manager().config();
+    let Some(token) = &config.webshare_api_token else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "未配置 webshare_api_token"})),
+        )
+            .into_response();
+    };
+    let client = crate::admin::webshare::WebshareClient::new(token.clone());
+    match crate::admin::webshare::replace_and_sync(&client, state.service.proxy_pool(), proxy_id).await {
+        Ok(r) => Json(serde_json::json!({
+            "message": "替换完成",
+            "added": r.added,
+            "removed": r.removed,
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}

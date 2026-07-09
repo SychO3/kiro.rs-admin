@@ -378,6 +378,21 @@ async fn main() {
                 .service
                 .start_proxy_health_checker(std::time::Duration::from_secs(300));
 
+            // 启动 Webshare 代理自动同步
+            if let Some(ref token) = config.webshare_api_token {
+                if !token.trim().is_empty() {
+                    admin::webshare::spawn_background_sync(
+                        token.clone(),
+                        config.webshare_sync_interval_secs,
+                        proxy_pool.clone(),
+                    );
+                    tracing::info!(
+                        "Webshare 代理自动同步已启动（间隔 {}s）",
+                        config.webshare_sync_interval_secs
+                    );
+                }
+            }
+
             // 启动自动更新调度器：每分钟检查一次本地时间，到达 update_auto_apply_time
             // 且开启 update_auto_apply 时执行一次更新；否则静默等待。
             admin_state.service.start_auto_update_scheduler();

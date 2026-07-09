@@ -562,6 +562,10 @@ impl AdminService {
         &self.token_manager
     }
 
+    pub fn proxy_pool(&self) -> &Arc<ProxyPoolManager> {
+        &self.proxy_pool
+    }
+
     /// 注入日志治理句柄（trace 存储 + 用量记录器），用于运行时改保留期/开关。
     pub fn with_log_governance(
         mut self,
