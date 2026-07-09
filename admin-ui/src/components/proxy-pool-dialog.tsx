@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   XCircle,
   HelpCircle,
+  RefreshCw,
 } from 'lucide-react'
 import {
   Dialog,
@@ -37,6 +38,7 @@ import {
   PROXY_BALANCING_LABEL,
   checkProxy,
   assignProxiesRoundRobin,
+  webshareReplace,
   type ProxyBalancingMode,
 } from '@/api/credentials'
 import { extractErrorMessage, maskProxyUrl } from '@/lib/utils'
@@ -178,6 +180,21 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
       queryClient.invalidateQueries({ queryKey: ['credentials'] })
     },
     onError: (err) => toast.error(`分配失败: ${extractErrorMessage(err)}`),
+  })
+
+  const [replacingId, setReplacingId] = useState<number | null>(null)
+  const webshareReplaceMutation = useMutation({
+    mutationFn: (proxyId: number) => webshareReplace(proxyId),
+    onMutate: (proxyId) => setReplacingId(proxyId),
+    onSuccess: (res) => {
+      toast.success(`换 IP 完成：新增 ${res.added}，删除 ${res.removed}`)
+      queryClient.invalidateQueries({ queryKey: ['proxy-pool'] })
+      setReplacingId(null)
+    },
+    onError: (err) => {
+      toast.error(`换 IP 失败: ${extractErrorMessage(err)}`)
+      setReplacingId(null)
+    },
   })
 
   const handleAdd = (e: React.FormEvent) => {
@@ -716,6 +733,19 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
                         <Activity className="h-3 w-3 mr-1" />
                         {isChecking ? '...' : '测试'}
                       </Button>
+                      {proxy.label?.startsWith('WS-') && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs"
+                          onClick={() => webshareReplaceMutation.mutate(proxy.id)}
+                          disabled={replacingId === proxy.id}
+                          title="通过 Webshare API 替换此代理 IP"
+                        >
+                          <RefreshCw className={`h-3 w-3 mr-1 ${replacingId === proxy.id ? 'animate-spin' : ''}`} />
+                          {replacingId === proxy.id ? '换中...' : '换 IP'}
+                        </Button>
+                      )}
                       {onSelectProxy && proxy.enabled && (
                         <Button
                           size="sm"

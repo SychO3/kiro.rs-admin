@@ -429,6 +429,18 @@ export async function checkAllProxies(): Promise<ProxyCheckAllResponse> {
   return data
 }
 
+// Webshare 同步
+export async function webshareSync(): Promise<{ added: number; removed: number; unchanged: number }> {
+  const { data } = await api.post<{ added: number; removed: number; unchanged: number }>('/proxy-pool/webshare/sync')
+  return data
+}
+
+// Webshare 替换单个代理 IP
+export async function webshareReplace(proxyId: number): Promise<{ message: string; added: number; removed: number }> {
+  const { data } = await api.post<{ message: string; added: number; removed: number }>(`/proxy-pool/webshare/replace/${proxyId}`)
+  return data
+}
+
 // 轮询批量分配可用代理给凭据
 export async function assignProxiesRoundRobin(
   credentialIds?: number[] | null
