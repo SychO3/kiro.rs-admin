@@ -569,6 +569,16 @@ impl KiroProvider {
             Some(arn) => is_placeholder_profile_arn(arn),
         };
         if !needs {
+            // 从 profileArn 中提取区域，确保 api_region 正确
+            if let Some(arn) = ctx.credentials.profile_arn.as_deref() {
+                let parts: Vec<&str> = arn.splitn(6, ':').collect();
+                if parts.len() >= 4 && !parts[3].is_empty() {
+                    let region = parts[3];
+                    if ctx.credentials.api_region.as_deref() != Some(region) {
+                        ctx.credentials.api_region = Some(region.to_string());
+                    }
+                }
+            }
             return;
         }
         // 进程内去重：仅在「拿到上游确定结果」后才标记已尝试，避免一次网络抖动
@@ -597,6 +607,17 @@ impl KiroProvider {
                     ctx.id,
                     e
                 );
+            }
+        }
+
+        // 从 profileArn 中提取区域，确保 api_region 正确
+        if let Some(arn) = ctx.credentials.profile_arn.as_deref() {
+            let parts: Vec<&str> = arn.splitn(6, ':').collect();
+            if parts.len() >= 4 && !parts[3].is_empty() {
+                let region = parts[3];
+                if ctx.credentials.api_region.as_deref() != Some(region) {
+                    ctx.credentials.api_region = Some(region.to_string());
+                }
             }
         }
     }
