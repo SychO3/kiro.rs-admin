@@ -12,6 +12,8 @@ import {
   Settings2,
   Trash2,
 } from 'lucide-react'
+import { storage } from '@/lib/storage'
+import { maskEmailAddress } from '@/lib/utils'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -122,7 +124,8 @@ function formatTokenFull(n: number): string {
 
 function credLabel(id: number, email?: string | null): string {
   if (id === 0) return '—'
-  return email ? email : `#${id}`
+  if (!email) return `#${id}`
+  return storage.getPrivacyMode() ? maskEmailAddress(email) : email
 }
 
 function keyLabel(keyId: number, keyName?: string | null): string {
