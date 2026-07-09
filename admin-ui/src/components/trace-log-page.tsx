@@ -11,7 +11,7 @@ import {
   Unplug,
   Settings2,
   Trash2,
-  Zap,
+  Gauge,
 } from 'lucide-react'
 import { storage } from '@/lib/storage'
 import { maskEmailAddress } from '@/lib/utils'
@@ -301,7 +301,7 @@ function EffortBadge({ effort }: { effort: string }) {
   const cls = colors[effort] ?? 'bg-purple-50 text-purple-600 dark:bg-purple-950 dark:text-purple-400'
   return (
     <span className={`ml-1.5 inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium ${cls}`}>
-      <Zap className="h-2.5 w-2.5" />{effort}
+      <Gauge className="h-2.5 w-2.5" />{effort}
     </span>
   )
 }
