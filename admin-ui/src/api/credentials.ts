@@ -731,3 +731,35 @@ export async function pollIdcRelogin(
   )
   return data
 }
+
+// ============ 系统提示注入 ============
+
+export async function getSystemPrompt() {
+  const { data } = await api.get('/config/system-prompt')
+  return data
+}
+
+export async function updateSystemPrompt(req: any) {
+  const { data } = await api.put('/config/system-prompt', req)
+  return data
+}
+
+export async function upsertUserPreset(req: { id: string; name: string; description?: string; content: string }) {
+  const { data } = await api.post('/config/user-presets', req)
+  return data
+}
+
+export async function deleteUserPreset(id: string) {
+  const { data } = await api.delete(`/config/user-presets/${encodeURIComponent(id)}`)
+  return data
+}
+
+export async function getPromptFilter() {
+  const { data } = await api.get('/config/prompt-filter')
+  return data
+}
+
+export async function updatePromptFilter(req: any) {
+  const { data } = await api.post('/config/prompt-filter', req)
+  return data
+}

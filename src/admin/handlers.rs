@@ -1901,3 +1901,182 @@ pub async fn webshare_replace(
             .into_response(),
     }
 }
+
+// ============ 系统提示管理 ============
+
+/// GET /api/admin/config/system-prompt
+pub async fn get_system_prompt(State(state): State<AdminState>) -> impl IntoResponse {
+    let runtime = state.prompt_runtime.read();
+    let mut presets: Vec<super::types::PresetItem> = Vec::new();
+
+    // 内置预设
+    for p in crate::anthropic::prompt_presets::PRESETS {
+        presets.push(super::types::PresetItem {
+            id: p.id.to_string(),
+            name: p.name.to_string(),
+            description: p.description.to_string(),
+            source: "builtin".to_string(),
+            enabled: runtime.enabled_presets.iter().any(|id| id == p.id),
+            content: Some(p.content.to_string()),
+        });
+    }
+
+    // 用户预设
+    for up in &runtime.user_presets {
+        presets.push(super::types::PresetItem {
+            id: up.id.clone(),
+            name: up.name.clone(),
+            description: up.description.clone(),
+            source: "user".to_string(),
+            enabled: runtime.enabled_presets.iter().any(|id| id == &up.id),
+            content: Some(up.content.clone()),
+        });
+    }
+
+    let position_str = match runtime.position {
+        crate::model::config::SystemPromptPosition::Prepend => "prepend",
+        crate::model::config::SystemPromptPosition::Append => "append",
+    };
+
+    Json(super::types::SystemPromptResponse {
+        enabled: runtime.enabled,
+        position: position_str.to_string(),
+        custom_content: runtime.custom_content.clone(),
+        presets,
+    })
+}
+
+/// PUT /api/admin/config/system-prompt
+pub async fn update_system_prompt(
+    State(state): State<AdminState>,
+    Json(payload): Json<super::types::UpdateSystemPromptRequest>,
+) -> impl IntoResponse {
+    // 更新运行时
+    {
+        let mut runtime = state.prompt_runtime.write();
+        if let Some(enabled) = payload.enabled {
+            runtime.enabled = enabled;
+        }
+        if let Some(ref pos) = payload.position {
+            runtime.position = match pos.as_str() {
+                "prepend" => crate::model::config::SystemPromptPosition::Prepend,
+                _ => crate::model::config::SystemPromptPosition::Append,
+            };
+        }
+        if let Some(ref content) = payload.custom_content {
+            if content.is_empty() {
+                runtime.custom_content = None;
+            } else {
+                runtime.custom_content = Some(content.clone());
+            }
+        }
+        if let Some(ref presets) = payload.enabled_presets {
+            runtime.enabled_presets = presets.clone();
+        }
+    }
+
+    // 持久化
+    let p = payload.clone();
+    state.service.update_config_file(move |c| {
+        if let Some(enabled) = p.enabled {
+            c.system_prompt_enabled = enabled;
+        }
+        if let Some(ref pos) = p.position {
+            c.system_prompt_position = match pos.as_str() {
+                "prepend" => crate::model::config::SystemPromptPosition::Prepend,
+                _ => crate::model::config::SystemPromptPosition::Append,
+            };
+        }
+        if let Some(ref content) = p.custom_content {
+            if content.is_empty() {
+                c.system_prompt = None;
+            } else {
+                c.system_prompt = Some(content.clone());
+            }
+        }
+        if let Some(ref presets) = p.enabled_presets {
+            c.enabled_presets = presets.clone();
+        }
+    });
+
+    Json(super::types::SuccessResponse::new("系统提示配置已更新"))
+}
+
+/// POST /api/admin/config/user-presets
+pub async fn upsert_user_preset(
+    State(state): State<AdminState>,
+    Json(payload): Json<super::types::UpsertUserPresetRequest>,
+) -> impl IntoResponse {
+    let preset = crate::model::config::UserPreset {
+        id: payload.id.clone(),
+        name: payload.name.clone(),
+        description: payload.description.clone(),
+        content: payload.content.clone(),
+    };
+
+    // 更新运行时
+    {
+        let mut runtime = state.prompt_runtime.write();
+        if let Some(existing) = runtime.user_presets.iter_mut().find(|p| p.id == preset.id) {
+            *existing = preset.clone();
+        } else {
+            runtime.user_presets.push(preset.clone());
+        }
+    }
+
+    // 持久化
+    let preset_for_save = preset;
+    state.service.update_config_file(move |c| {
+        if let Some(existing) = c.user_presets.iter_mut().find(|p| p.id == preset_for_save.id) {
+            *existing = preset_for_save;
+        } else {
+            c.user_presets.push(preset_for_save);
+        }
+    });
+
+    Json(super::types::SuccessResponse::new("用户预设已保存"))
+}
+
+/// DELETE /api/admin/config/user-presets/{id}
+pub async fn delete_user_preset(
+    State(state): State<AdminState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    // 更新运行时
+    {
+        let mut runtime = state.prompt_runtime.write();
+        runtime.user_presets.retain(|p| p.id != id);
+        runtime.enabled_presets.retain(|pid| pid != &id);
+    }
+
+    // 持久化
+    let id_clone = id.clone();
+    state.service.update_config_file(move |c| {
+        c.user_presets.retain(|p| p.id != id_clone);
+        c.enabled_presets.retain(|pid| pid != &id_clone);
+    });
+
+    Json(super::types::SuccessResponse::new("用户预设已删除"))
+}
+
+/// GET /api/admin/config/prompt-filter
+pub async fn get_prompt_filter_config(State(state): State<AdminState>) -> impl IntoResponse {
+    let cfg = state.prompt_filter_config.read().clone();
+    Json(cfg)
+}
+
+/// POST /api/admin/config/prompt-filter
+pub async fn update_prompt_filter_config(
+    State(state): State<AdminState>,
+    Json(payload): Json<crate::model::config::PromptFilterConfig>,
+) -> impl IntoResponse {
+    // 更新运行时
+    *state.prompt_filter_config.write() = payload.clone();
+
+    // 持久化
+    state.service.update_config_file(move |c| {
+        c.prompt_filter = payload;
+    });
+
+    Json(super::types::SuccessResponse::new("提示过滤配置已更新"))
+}

@@ -1264,6 +1264,52 @@ pub struct ReplaceModelMappingsRequest {
     pub mappings: Vec<super::model_mapping::ModelMapping>,
 }
 
+// ============ 系统提示 ============
+
+/// 系统提示预设列表项
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresetItem {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub source: String,
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+}
+
+/// 系统提示配置响应
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemPromptResponse {
+    pub enabled: bool,
+    pub position: String,
+    pub custom_content: Option<String>,
+    pub presets: Vec<PresetItem>,
+}
+
+/// 更新系统提示配置请求
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSystemPromptRequest {
+    pub enabled: Option<bool>,
+    pub position: Option<String>,
+    pub custom_content: Option<String>,
+    pub enabled_presets: Option<Vec<String>>,
+}
+
+/// 创建/更新用户预设请求
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpsertUserPresetRequest {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub content: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

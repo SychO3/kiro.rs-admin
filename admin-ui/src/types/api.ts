@@ -631,6 +631,56 @@ export interface UpsertModelMappingRequest {
   target: string
 }
 
+// ============ 系统提示注入 ============
+
+export type SystemPromptPosition = 'prepend' | 'append'
+
+export interface PresetItem {
+  id: string
+  name: string
+  description: string
+  source: 'builtin' | 'user'
+  enabled: boolean
+  content?: string
+}
+
+export interface SystemPromptResponse {
+  enabled: boolean
+  position: SystemPromptPosition
+  customContent: string | null
+  presets: PresetItem[]
+}
+
+export interface UpdateSystemPromptRequest {
+  enabled?: boolean
+  position?: SystemPromptPosition
+  customContent?: string
+  enabledPresets?: string[]
+}
+
+export interface UpsertUserPresetRequest {
+  id: string
+  name: string
+  description?: string
+  content: string
+}
+
+export interface PromptFilterConfig {
+  filterClaudeCode: boolean
+  filterStripBoundaries: boolean
+  filterEnvNoise: boolean
+  rules: PromptFilterRule[]
+}
+
+export interface PromptFilterRule {
+  id: string
+  name: string
+  enabled: boolean
+  ruleType: string
+  matchPattern: string
+  replace: string
+}
+
 export interface CreateGroupRequest {
   name: string
   description?: string

@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useState, type ComponentPropsWithoutRef } from 'react'
 import {
   Activity, Link, RefreshCw, UploadCloud, Settings, Key, Wand2, Eye, EyeOff, Copy,
-  MoreHorizontal, ShieldAlert, ShieldCheck, Gauge, Shuffle,
+  MoreHorizontal, ShieldAlert, ShieldCheck, Gauge, Shuffle, MessageSquarePlus,
 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -29,6 +29,7 @@ import {
 import { extractErrorMessage, generateApiKey } from '@/lib/utils'
 import { ImageUpdateDialog } from '@/components/image-update-dialog'
 import { ModelMappingsDialog } from '@/components/model-mappings-dialog'
+import { SystemPromptDialog } from '@/components/system-prompt-dialog'
 
 /**
  * 顶栏右侧通用工具栏：负载均衡切换、刷新、在线更新、设置（Key 管理）。
@@ -52,6 +53,7 @@ export function TopbarTools({ compact = false }: TopbarToolsProps) {
 
   const [imageUpdateOpen, setImageUpdateOpen] = useState(false)
   const [modelMappingsOpen, setModelMappingsOpen] = useState(false)
+  const [systemPromptOpen, setSystemPromptOpen] = useState(false)
   const [keyDialogOpen, setKeyDialogOpen] = useState(false)
   const [newKey, setNewKey] = useState('')
   const [showPlain, setShowPlain] = useState(false)
@@ -132,6 +134,7 @@ export function TopbarTools({ compact = false }: TopbarToolsProps) {
     loadBalancingMode: loadBalancingData?.mode,
     openImageUpdate: () => setImageUpdateOpen(true),
     openModelMappings: () => setModelMappingsOpen(true),
+    openSystemPrompt: () => setSystemPromptOpen(true),
     openKeyDialog,
     retryPolicy,
     setRetryPolicy: (mode: RetryMode, customPolicy?: RetryPolicy | null) =>
@@ -157,6 +160,7 @@ export function TopbarTools({ compact = false }: TopbarToolsProps) {
       {compact ? <CompactTools controls={controls} /> : <FullTools controls={controls} />}
       <ImageUpdateDialog open={imageUpdateOpen} onOpenChange={setImageUpdateOpen} />
       <ModelMappingsDialog open={modelMappingsOpen} onOpenChange={setModelMappingsOpen} />
+      <SystemPromptDialog open={systemPromptOpen} onOpenChange={setSystemPromptOpen} />
 
       <Dialog
         open={keyDialogOpen}
@@ -267,6 +271,7 @@ interface ToolControls {
   loadBalancingMode?: LoadBalancingMode
   openImageUpdate: () => void
   openModelMappings: () => void
+  openSystemPrompt: () => void
   openKeyDialog: () => void
   retryPolicy?: RetryPolicyConfig
   setRetryPolicy: (mode: RetryMode, customPolicy?: RetryPolicy | null) => void
@@ -292,6 +297,7 @@ function FullTools({ controls }: { controls: ToolControls }) {
       <KeySettingsMenu
         onOpenKeyDialog={controls.openKeyDialog}
         onOpenModelMappings={controls.openModelMappings}
+        onOpenSystemPrompt={controls.openSystemPrompt}
       />
     </>
   )
@@ -342,6 +348,9 @@ function CompactTools({ controls }: { controls: ToolControls }) {
         <DropdownMenuLabel>模型</DropdownMenuLabel>
         <DropdownMenuItem onSelect={controls.openModelMappings}>
           <Shuffle />模型映射（请求时模型名转发）
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={controls.openSystemPrompt}>
+          <MessageSquarePlus />系统提示注入
         </DropdownMenuItem>
         <DropdownMenuLabel>密钥管理</DropdownMenuLabel>
         <DropdownMenuItem onSelect={controls.openKeyDialog}>
@@ -672,9 +681,11 @@ function ImageUpdateButton({ controls }: { controls: ToolControls }) {
 function KeySettingsMenu({
   onOpenKeyDialog,
   onOpenModelMappings,
+  onOpenSystemPrompt,
 }: {
   onOpenKeyDialog: () => void
   onOpenModelMappings: () => void
+  onOpenSystemPrompt: () => void
 }) {
   return (
     <DropdownMenu>
@@ -687,6 +698,9 @@ function KeySettingsMenu({
         <DropdownMenuLabel>模型</DropdownMenuLabel>
         <DropdownMenuItem onSelect={onOpenModelMappings}>
           <Shuffle />模型映射（请求时模型名转发）
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onOpenSystemPrompt}>
+          <MessageSquarePlus />系统提示注入
         </DropdownMenuItem>
         <DropdownMenuLabel>密钥管理</DropdownMenuLabel>
         <DropdownMenuItem onSelect={onOpenKeyDialog}>

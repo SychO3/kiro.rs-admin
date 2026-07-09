@@ -9,6 +9,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Json, Response},
 };
+use parking_lot::RwLock as ParkingRwLock;
 use tokio::sync::RwLock;
 
 use crate::admin::client_keys::SharedClientKeyManager;
@@ -55,6 +56,10 @@ pub struct AppState {
     pub model_mappings: Option<crate::admin::SharedModelMappingManager>,
     /// 动态模型列表缓存（管理员手动刷新）
     pub models_cache: Arc<RwLock<Vec<Model>>>,
+    /// 系统提示注入运行时配置
+    pub prompt_runtime: Option<crate::model::runtime::SharedPromptConfig>,
+    /// 系统提示过滤配置
+    pub prompt_filter_config: Option<Arc<ParkingRwLock<crate::model::config::PromptFilterConfig>>>,
 }
 
 impl AppState {
@@ -75,6 +80,8 @@ impl AppState {
             trace_store: None,
             model_mappings: None,
             models_cache: Arc::new(RwLock::new(Vec::new())),
+            prompt_runtime: None,
+            prompt_filter_config: None,
         }
     }
 
@@ -115,6 +122,18 @@ impl AppState {
         mappings: Option<crate::admin::SharedModelMappingManager>,
     ) -> Self {
         self.model_mappings = mappings;
+        self
+    }
+
+    /// 注入系统提示运行时配置
+    pub fn with_prompt_runtime(mut self, runtime: Option<crate::model::runtime::SharedPromptConfig>) -> Self {
+        self.prompt_runtime = runtime;
+        self
+    }
+
+    /// 注入系统提示过滤配置
+    pub fn with_prompt_filter_config(mut self, cfg: Option<Arc<ParkingRwLock<crate::model::config::PromptFilterConfig>>>) -> Self {
+        self.prompt_filter_config = cfg;
         self
     }
 }

@@ -321,6 +321,10 @@ async fn main() {
 
     let models_cache = std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new()));
 
+    // 初始化系统提示运行时配置和过滤配置
+    let prompt_runtime = crate::model::runtime::shared_from_config(&config);
+    let prompt_filter_config = std::sync::Arc::new(parking_lot::RwLock::new(config.prompt_filter.clone()));
+
     let anthropic_app = anthropic::create_router(
         Some(kiro_provider.clone()),
         config.extract_thinking,
@@ -332,6 +336,8 @@ async fn main() {
         trace_store.clone(),
         Some(model_mapping_manager.clone()),
         models_cache.clone(),
+        Some(prompt_runtime.clone()),
+        Some(prompt_filter_config.clone()),
     );
 
     // 构建 Admin API 路由（配置了非空 adminApiKey 时启用）
@@ -366,6 +372,8 @@ async fn main() {
                 group_manager.clone(),
                 model_mapping_manager.clone(),
                 models_cache.clone(),
+                prompt_runtime.clone(),
+                prompt_filter_config.clone(),
             );
 
             // 启动余额后台刷新调度器（每 5 分钟一次，与缓存 TTL 对齐）

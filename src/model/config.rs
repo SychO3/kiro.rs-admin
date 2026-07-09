@@ -183,6 +183,61 @@ impl RetryPolicy {
     }
 }
 
+// ============ 系统提示词相关类型 ============
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SystemPromptPosition {
+    Prepend,
+    Append,
+}
+
+impl Default for SystemPromptPosition {
+    fn default() -> Self {
+        Self::Append
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UserPreset {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptFilterConfig {
+    #[serde(default)]
+    pub filter_claude_code: bool,
+    #[serde(default)]
+    pub filter_strip_boundaries: bool,
+    #[serde(default)]
+    pub filter_env_noise: bool,
+    #[serde(default)]
+    pub rules: Vec<PromptFilterRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptFilterRule {
+    pub id: String,
+    pub name: String,
+    #[serde(default = "default_filter_rule_enabled")]
+    pub enabled: bool,
+    pub rule_type: String,
+    pub match_pattern: String,
+    #[serde(default)]
+    pub replace: String,
+}
+
+fn default_filter_rule_enabled() -> bool {
+    true
+}
+
 /// KNA 应用配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -357,6 +412,27 @@ pub struct Config {
     #[serde(default)]
     pub endpoints: HashMap<String, serde_json::Value>,
 
+    // ============ 系统提示词 ============
+
+    #[serde(default)]
+    pub system_prompt_enabled: bool,
+
+    #[serde(default)]
+    pub enabled_presets: Vec<String>,
+
+    #[serde(default)]
+    pub user_presets: Vec<UserPreset>,
+
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+
+    #[serde(default)]
+    pub system_prompt_position: SystemPromptPosition,
+
+    #[serde(default)]
+    pub prompt_filter: PromptFilterConfig,
+
     /// 配置文件路径（运行时元数据，不写入 JSON）
     #[serde(skip)]
     config_path: Option<PathBuf>,
@@ -493,6 +569,12 @@ impl Default for Config {
             trace_retention_days: default_trace_retention_days(),
             usage_log_retention_days: default_usage_log_retention_days(),
             endpoints: HashMap::new(),
+            system_prompt_enabled: false,
+            enabled_presets: Vec::new(),
+            user_presets: Vec::new(),
+            system_prompt: None,
+            system_prompt_position: SystemPromptPosition::default(),
+            prompt_filter: PromptFilterConfig::default(),
             config_path: None,
         }
     }

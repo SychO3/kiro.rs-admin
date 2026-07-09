@@ -39,6 +39,10 @@ pub struct AdminState {
     pub model_mappings: super::model_mapping::SharedModelMappingManager,
     /// 动态模型列表缓存（与 anthropic 路由共享）
     pub models_cache: Arc<tokio::sync::RwLock<Vec<crate::anthropic::types::Model>>>,
+    /// 系统提示注入运行时配置
+    pub prompt_runtime: crate::model::runtime::SharedPromptConfig,
+    /// 系统提示过滤配置
+    pub prompt_filter_config: Arc<RwLock<crate::model::config::PromptFilterConfig>>,
 }
 
 impl AdminState {
@@ -52,6 +56,8 @@ impl AdminState {
         groups: SharedGroupManager,
         model_mappings: super::model_mapping::SharedModelMappingManager,
         models_cache: Arc<tokio::sync::RwLock<Vec<crate::anthropic::types::Model>>>,
+        prompt_runtime: crate::model::runtime::SharedPromptConfig,
+        prompt_filter_config: Arc<RwLock<crate::model::config::PromptFilterConfig>>,
     ) -> Self {
         Self {
             admin_api_key: Arc::new(RwLock::new(admin_api_key.into())),
@@ -62,6 +68,8 @@ impl AdminState {
             groups,
             model_mappings,
             models_cache,
+            prompt_runtime,
+            prompt_filter_config,
         }
     }
 }

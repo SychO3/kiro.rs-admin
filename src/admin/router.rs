@@ -11,15 +11,17 @@ use super::{
         assign_proxy_to_credential, batch_add_proxies, batch_import_credentials, check_all_proxies,
         check_proxy, check_proxy_url, check_rate_limit, check_update, clear_throttle, clear_traces,
         complete_social_login, complete_social_relogin, create_client_key, create_group,
-        delete_client_key, delete_credential, delete_group, delete_proxy, disable_quota_exceeded,
-        enable_overage_all, export_credentials, force_refresh_token, get_account_throttle_config,
-        get_all_credentials, get_credential_balance, get_credential_models, get_global_proxy,
-        get_load_balancing_mode, get_log_governance_config, get_proxy_balancing_mode,
-        delete_model_mapping, get_proxy_pool, get_retry_policy, get_update_config, list_client_keys,
-        list_groups, list_model_mappings, list_traces, poll_idc_login, poll_idc_relogin,
-        poll_social_login, poll_social_relogin, replace_model_mappings, upsert_model_mapping,
+        delete_client_key, delete_credential, delete_group, delete_proxy, delete_user_preset,
+        disable_quota_exceeded, enable_overage_all, export_credentials, force_refresh_token,
+        get_account_throttle_config, get_all_credentials, get_credential_balance,
+        get_credential_models, get_global_proxy, get_load_balancing_mode,
+        get_log_governance_config, get_prompt_filter_config, get_proxy_balancing_mode,
+        get_system_prompt, delete_model_mapping, get_proxy_pool, get_retry_policy,
+        get_update_config, list_client_keys, list_groups, list_model_mappings, list_traces,
+        poll_idc_login, poll_idc_relogin, poll_social_login, poll_social_relogin,
+        replace_model_mappings, upsert_model_mapping, upsert_user_preset,
         pull_update_image, reset_all_success_count, reset_client_key_stats, reset_failure_count,
-        refresh_models,
+        refresh_models, update_prompt_filter_config, update_system_prompt,
         reset_success_count, rollback_image_update, rotate_client_key, set_account_throttle_config,
         set_client_key_disabled, set_credential_disabled, set_credential_overage,
         set_credential_priority, set_global_proxy, set_load_balancing_mode,
@@ -125,6 +127,16 @@ pub fn create_admin_router(state: AdminState) -> Router {
             get(get_update_config).put(set_update_config),
         )
         .route("/config/admin-key", put(update_admin_key))
+        .route(
+            "/config/system-prompt",
+            get(get_system_prompt).put(update_system_prompt),
+        )
+        .route("/config/user-presets", post(upsert_user_preset))
+        .route("/config/user-presets/{id}", delete(delete_user_preset))
+        .route(
+            "/config/prompt-filter",
+            get(get_prompt_filter_config).post(update_prompt_filter_config),
+        )
         .route("/system/update/pull", post(pull_update_image))
         .route("/system/update/apply", post(apply_image_update))
         .route("/system/update/rollback", post(rollback_image_update))

@@ -43,6 +43,8 @@ pub fn create_router_with_provider(
         None,
         None,
         Arc::new(tokio::sync::RwLock::new(Vec::new())),
+        None,
+        None,
     )
 }
 
@@ -59,6 +61,8 @@ pub fn create_router(
     trace_store: Option<SharedTraceStore>,
     model_mappings: Option<crate::admin::SharedModelMappingManager>,
     models_cache: Arc<tokio::sync::RwLock<Vec<crate::anthropic::types::Model>>>,
+    prompt_runtime: Option<crate::model::runtime::SharedPromptConfig>,
+    prompt_filter_config: Option<std::sync::Arc<parking_lot::RwLock<crate::model::config::PromptFilterConfig>>>,
 ) -> Router {
     let mut state = AppState::new(extract_thinking, tool_compatibility_mode);
     if let Some(provider) = kiro_provider {
@@ -68,6 +72,8 @@ pub fn create_router(
     state = state.with_cache_meter(cache_meter);
     state = state.with_trace_store(trace_store);
     state = state.with_model_mappings(model_mappings);
+    state = state.with_prompt_runtime(prompt_runtime);
+    state = state.with_prompt_filter_config(prompt_filter_config);
     state.models_cache = models_cache;
 
     // 需要认证的 /v1 路由

@@ -33,7 +33,7 @@ use super::middleware::{AppState, KeyContext};
 use super::stream::{BufferedStreamContext, SseEvent, StreamContext};
 use super::types::{
     CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, Model, ModelsResponse,
-    OutputConfig, Thinking,
+    OutputConfig, SystemMessage, Thinking,
 };
 use super::websearch;
 
@@ -715,6 +715,19 @@ pub async fn post_messages(
 
     // 检测模型名是否包含 "thinking" 后缀，若包含则覆写 thinking 配置
     override_thinking_from_model_name(&mut payload);
+
+    // 系统提示过滤
+    if let Some(filter_cfg) = &state.prompt_filter_config {
+        let cfg = filter_cfg.read().clone();
+        if let Some(system) = &mut payload.system {
+            for msg in system.iter_mut() {
+                msg.text = crate::anthropic::prompt_filter::apply_prompt_filters(&cfg, &msg.text);
+            }
+            system.retain(|m| !m.text.is_empty());
+        }
+    }
+    // 系统提示注入
+    inject_system_prompt(&mut payload, &state.prompt_runtime);
 
     // 检查是否为 WebSearch 请求
     if websearch::has_web_search_tool(&payload) {
@@ -1585,6 +1598,19 @@ pub async fn post_messages_cc(
     // 检测模型名是否包含 "thinking" 后缀，若包含则覆写 thinking 配置
     override_thinking_from_model_name(&mut payload);
 
+    // 系统提示过滤
+    if let Some(filter_cfg) = &state.prompt_filter_config {
+        let cfg = filter_cfg.read().clone();
+        if let Some(system) = &mut payload.system {
+            for msg in system.iter_mut() {
+                msg.text = crate::anthropic::prompt_filter::apply_prompt_filters(&cfg, &msg.text);
+            }
+            system.retain(|m| !m.text.is_empty());
+        }
+    }
+    // 系统提示注入
+    inject_system_prompt(&mut payload, &state.prompt_runtime);
+
     // 检查是否为 WebSearch 请求
     if websearch::has_web_search_tool(&payload) {
         tracing::info!("检测到 WebSearch 工具，路由到 WebSearch 处理");
@@ -1972,6 +1998,32 @@ fn create_buffered_sse_stream(
         },
     )
     .flatten()
+}
+
+/// 将运行时 prompt 配置中的内容注入到请求的 system 消息中
+fn inject_system_prompt(
+    payload: &mut MessagesRequest,
+    shared: &Option<crate::model::runtime::SharedPromptConfig>,
+) {
+    let Some(shared) = shared else { return };
+    let (injection, position) = {
+        let cfg = shared.read();
+        (cfg.build_injection_text(), cfg.position)
+    };
+    let Some(text) = injection else { return };
+    let injected = SystemMessage {
+        text,
+        cache_control: None,
+    };
+    match &mut payload.system {
+        Some(existing) => match position {
+            crate::model::config::SystemPromptPosition::Prepend => existing.insert(0, injected),
+            crate::model::config::SystemPromptPosition::Append => existing.push(injected),
+        },
+        None => {
+            payload.system = Some(vec![injected]);
+        }
+    }
 }
 
 #[cfg(test)]
