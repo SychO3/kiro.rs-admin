@@ -405,6 +405,8 @@ export interface ClientKeyItem {
   totalOutputTokens: number
   totalCacheCreationTokens: number
   totalCacheReadTokens: number
+  totalCredits?: number
+  totalCost?: number
   /** 绑定的账号分组（未绑定时为 undefined） */
   group?: string
   /** 是否系统密钥（config.json apiKey 导入，不可删除 / 不可轮换） */

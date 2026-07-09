@@ -152,6 +152,13 @@ export function formatCredits(value: number | null | undefined): string {
   return value.toFixed(3)
 }
 
+export function formatCost(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value) || value <= 0) return '$0'
+  if (value >= 1) return `$${value.toFixed(2)}`
+  if (value >= 0.01) return `$${value.toFixed(3)}`
+  return `$${value.toFixed(4)}`
+}
+
 /**
  * 脱敏代理 URL：将 user:pass@host 中的认证信息替换为 xxx****xxx
  */

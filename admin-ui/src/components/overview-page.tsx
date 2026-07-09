@@ -19,7 +19,7 @@ import type {
 import { TimeSeriesChart } from '@/components/charts/time-series-chart'
 import { ModelPieChart } from '@/components/charts/model-pie-chart'
 import { CredentialBarChart } from '@/components/charts/credential-bar-chart'
-import { cn, formatCredits, formatNumber } from '@/lib/utils'
+import { cn, formatCost, formatCredits, formatNumber } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import {
   Select,
@@ -204,6 +204,7 @@ function PageHeader() {
 interface RangeStats {
   calls: number
   credits: number
+  cost: number
   errors: number
   inputTokens: number
   outputTokens: number
@@ -214,11 +215,12 @@ function aggregateSeries(data: TimeSeriesPoint[]): RangeStats {
     (acc, p) => ({
       calls: acc.calls + p.calls,
       credits: acc.credits + (p.credits ?? 0),
+      cost: acc.cost + (p.cost ?? 0),
       errors: acc.errors + p.errors,
       inputTokens: acc.inputTokens + p.inputTokens,
       outputTokens: acc.outputTokens + p.outputTokens,
     }),
-    { calls: 0, credits: 0, errors: 0, inputTokens: 0, outputTokens: 0 },
+    { calls: 0, credits: 0, cost: 0, errors: 0, inputTokens: 0, outputTokens: 0 },
   )
 }
 
@@ -246,9 +248,9 @@ function StatsCards({
     { icon: <Cpu className="h-4 w-4" />, label: '输出 Token', value: formatNumber(stats.outputTokens) },
     {
       icon: <Coins className="h-4 w-4" />,
-      label: 'Credit',
-      value: formatCredits(stats.credits),
-      extra: <span className="text-[11px] text-muted-foreground">上游计费量</span>,
+      label: '费用',
+      value: formatCost(stats.cost),
+      extra: <span className="text-[11px] text-muted-foreground">⚡{formatCredits(stats.credits)}</span>,
     },
     {
       icon: <KeyRound className="h-4 w-4" />,

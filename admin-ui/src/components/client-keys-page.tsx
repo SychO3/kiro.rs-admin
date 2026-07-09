@@ -21,7 +21,7 @@ import {
 import { useGroupOptions } from '@/hooks/use-groups'
 import { GroupSingleSelect } from '@/components/group-select'
 import type { ClientKeyItem, CreateClientKeyResponse } from '@/types/api'
-import { extractErrorMessage } from '@/lib/utils'
+import { extractErrorMessage, formatCost } from '@/lib/utils'
 import { useConfirm } from '@/components/ui/confirm-dialog'
 
 function formatTokens(n: number): string {
@@ -234,6 +234,7 @@ export function ClientKeysPage() {
                   <th className="text-right font-medium px-4 py-3">总调用</th>
                   <th className="text-right font-medium px-4 py-3">输入</th>
                   <th className="text-right font-medium px-4 py-3">输出</th>
+                  <th className="text-right font-medium px-4 py-3">费用</th>
                   <th className="text-left font-medium px-4 py-3">最后使用</th>
                   <th className="text-right font-medium px-4 py-3">操作</th>
                 </tr>
@@ -295,6 +296,9 @@ export function ClientKeysPage() {
                     <td className="px-4 py-3 text-right tabular-nums">{k.totalCalls}</td>
                     <td className="px-4 py-3 text-right tabular-nums">{formatTokens(k.totalInputTokens)}</td>
                     <td className="px-4 py-3 text-right tabular-nums">{formatTokens(k.totalOutputTokens)}</td>
+                    <td className="px-4 py-3 text-right tabular-nums text-[12px]">
+                      <span className="text-amber-600 dark:text-amber-400">{formatCost(k.totalCost)}</span>
+                    </td>
                     <td className="px-4 py-3 text-[12px] text-muted-foreground">
                       {formatRelative(k.lastUsedAt)}
                     </td>
