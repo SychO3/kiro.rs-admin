@@ -100,6 +100,15 @@ pub struct ProxyPoolManager {
     path: Option<PathBuf>,
     /// TLS 后端，构建探测用 HTTP client 时需要
     tls_backend: TlsBackend,
+    /// 代理被自动禁用时通知外部（Webshare 自动替换）
+    auto_disable_tx: Mutex<Option<tokio::sync::mpsc::UnboundedSender<AutoDisableEvent>>>,
+}
+
+/// 代理被自动禁用的事件
+#[derive(Debug, Clone)]
+pub struct AutoDisableEvent {
+    pub proxy_id: u64,
+    pub url: String,
 }
 
 #[derive(Default)]
@@ -159,7 +168,13 @@ impl ProxyPoolManager {
             next_id: AtomicU64::new(next_id),
             path,
             tls_backend,
+            auto_disable_tx: Mutex::new(None),
         }
+    }
+
+    /// 注册自动禁用事件通道（Webshare 自动替换用）
+    pub fn set_auto_disable_sender(&self, tx: tokio::sync::mpsc::UnboundedSender<AutoDisableEvent>) {
+        *self.auto_disable_tx.lock() = Some(tx);
     }
 
     pub fn list(&self) -> Vec<ProxyEntry> {
@@ -464,7 +479,17 @@ impl ProxyPoolManager {
         }
 
         if let Some(url) = disabled_url {
-            self.clear_runtime_for_urls(&[url]);
+            self.clear_runtime_for_urls(&[url.clone()]);
+            // 通知 Webshare 自动替换
+            if let Some(tx) = self.auto_disable_tx.lock().as_ref() {
+                let entries = self.entries.lock();
+                if let Some(entry) = entries.iter().find(|e| e.url == url) {
+                    let _ = tx.send(AutoDisableEvent {
+                        proxy_id: entry.id,
+                        url: url.clone(),
+                    });
+                }
+            }
         }
         if changed && let Err(e) = self.persist() {
             tracing::warn!("记录运行时代理失败后持久化失败: {}", e);

@@ -385,6 +385,7 @@ async fn main() {
                         token.clone(),
                         config.webshare_sync_interval_secs,
                         proxy_pool.clone(),
+                        config.webshare_auto_replace,
                     );
                     tracing::info!(
                         "Webshare 代理自动同步已启动（间隔 {}s）",

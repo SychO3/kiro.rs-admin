@@ -213,7 +213,12 @@ pub fn spawn_background_sync(
     api_token: String,
     interval_secs: u64,
     pool: Arc<ProxyPoolManager>,
+    auto_replace: bool,
 ) {
+    let token_clone = api_token.clone();
+    let pool_clone = pool.clone();
+
+    // 定时同步 task
     tokio::spawn(async move {
         let client = WebshareClient::new(api_token);
         // 首次立即同步
@@ -241,6 +246,40 @@ pub fn spawn_background_sync(
             }
         }
     });
+
+    // 自动替换 task：监听代理被自动禁用事件
+    if auto_replace {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        pool_clone.set_auto_disable_sender(tx);
+        tokio::spawn(async move {
+            let client = WebshareClient::new(token_clone);
+            while let Some(event) = rx.recv().await {
+                let is_webshare = event.url.contains("@"); // Webshare 代理有 user:pass@host 格式
+                let label_match = pool_clone
+                    .list()
+                    .iter()
+                    .find(|e| e.id == event.proxy_id)
+                    .and_then(|e| e.label.as_deref())
+                    .map(|l| l.starts_with("WS-"))
+                    .unwrap_or(false);
+                if !is_webshare || !label_match {
+                    continue;
+                }
+                tracing::info!(
+                    proxy_id = event.proxy_id,
+                    url = %event.url,
+                    "代理被自动禁用，触发 Webshare 自动替换"
+                );
+                match replace_and_sync(&client, &pool_clone, event.proxy_id).await {
+                    Ok(r) => tracing::info!(
+                        "Webshare 自动替换完成：新增 {}，删除 {}",
+                        r.added, r.removed
+                    ),
+                    Err(e) => tracing::error!("Webshare 自动替换失败：{}", e),
+                }
+            }
+        });
+    }
 }
 
 #[cfg(test)]
