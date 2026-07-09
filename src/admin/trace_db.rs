@@ -93,6 +93,9 @@ pub struct TraceRecord {
     pub model: String,
     /// 是否流式
     pub is_stream: bool,
+    /// 思考强度（low / medium / high）
+    #[serde(default)]
+    pub effort: Option<String>,
     /// 最终状态：success / error / interrupted
     pub final_status: String,
     /// 最终命中（成功）或最后尝试的凭据 id
@@ -257,7 +260,7 @@ impl TraceStore {
         // (列名, 定义) —— 与 SCHEMA 中新增列保持一致
         // 注意 key_source 不带 NOT NULL：老库已有行需先以 NULL 添加再回填（SQLite ALTER ADD COLUMN
         // NOT NULL 不带常量 DEFAULT 时无法对已有行赋值）。新插入永远写入合法值。
-        let columns: [(&str, &str); 8] = [
+        let columns: [(&str, &str); 9] = [
             ("input_tokens", "INTEGER NOT NULL DEFAULT 0"),
             ("output_tokens", "INTEGER NOT NULL DEFAULT 0"),
             ("cache_creation_tokens", "INTEGER NOT NULL DEFAULT 0"),
@@ -266,6 +269,7 @@ impl TraceStore {
             ("cost", "REAL NOT NULL DEFAULT 0"),
             ("first_token_ms", "INTEGER"),
             ("key_source", "TEXT"),
+            ("effort", "TEXT"),
         ];
         let key_source_added = !existing.contains("key_source");
         for (name, def) in columns {
@@ -324,11 +328,11 @@ impl TraceStore {
         let res = (|| -> rusqlite::Result<()> {
             tx.execute(
                 "INSERT OR REPLACE INTO traces (trace_id, ts, ts_epoch, key_id, key_source, model, \
-                 is_stream, final_status, final_credential_id, error_type, error_message, \
+                 is_stream, effort, final_status, final_credential_id, error_type, error_message, \
                  total_attempts, duration_ms, interrupted_after_bytes, \
                  input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, \
                  credits, cost, first_token_ms) \
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)",
                 rusqlite::params![
                     rec.trace_id,
                     rec.ts,
@@ -337,6 +341,7 @@ impl TraceStore {
                     rec.key_source.as_str(),
                     rec.model,
                     rec.is_stream as i64,
+                    rec.effort,
                     rec.final_status,
                     rec.final_credential_id as i64,
                     rec.error_type,
@@ -485,7 +490,7 @@ impl TraceStore {
             q.limit
         };
         let sql = format!(
-            "SELECT trace_id, ts, key_id, key_source, model, is_stream, final_status, final_credential_id, \
+            "SELECT trace_id, ts, key_id, key_source, model, is_stream, effort, final_status, final_credential_id, \
              error_type, error_message, total_attempts, duration_ms, interrupted_after_bytes, \
              input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, credits, cost, first_token_ms \
              FROM traces {} ORDER BY ts_epoch DESC LIMIT {} OFFSET {}",
@@ -501,20 +506,21 @@ impl TraceStore {
                 key_source: TraceKeySource::from_db(row.get::<_, String>(3)?.as_str(), 3)?,
                 model: row.get(4)?,
                 is_stream: row.get::<_, i64>(5)? != 0,
-                final_status: row.get(6)?,
-                final_credential_id: row.get::<_, i64>(7)? as u64,
-                error_type: row.get(8)?,
-                error_message: row.get(9)?,
-                total_attempts: row.get::<_, i64>(10)? as u32,
-                duration_ms: row.get::<_, i64>(11)? as u64,
-                interrupted_after_bytes: row.get::<_, Option<i64>>(12)?.map(|v| v as u64),
-                input_tokens: row.get::<_, i64>(13)? as u64,
-                output_tokens: row.get::<_, i64>(14)? as u64,
-                cache_creation_tokens: row.get::<_, i64>(15)? as u64,
-                cache_read_tokens: row.get::<_, i64>(16)? as u64,
-                credits: row.get::<_, f64>(17)?,
-                cost: row.get::<_, f64>(18)?,
-                first_token_ms: row.get::<_, Option<i64>>(19)?.map(|v| v as u64),
+                effort: row.get(6)?,
+                final_status: row.get(7)?,
+                final_credential_id: row.get::<_, i64>(8)? as u64,
+                error_type: row.get(9)?,
+                error_message: row.get(10)?,
+                total_attempts: row.get::<_, i64>(11)? as u32,
+                duration_ms: row.get::<_, i64>(12)? as u64,
+                interrupted_after_bytes: row.get::<_, Option<i64>>(13)?.map(|v| v as u64),
+                input_tokens: row.get::<_, i64>(14)? as u64,
+                output_tokens: row.get::<_, i64>(15)? as u64,
+                cache_creation_tokens: row.get::<_, i64>(16)? as u64,
+                cache_read_tokens: row.get::<_, i64>(17)? as u64,
+                credits: row.get::<_, f64>(18)?,
+                cost: row.get::<_, f64>(19)?,
+                first_token_ms: row.get::<_, Option<i64>>(20)?.map(|v| v as u64),
                 attempts: Vec::new(),
             })
         })?;
@@ -715,6 +721,7 @@ CREATE TABLE IF NOT EXISTS traces (
     key_source        TEXT,
     model             TEXT NOT NULL,
     is_stream         INTEGER NOT NULL,
+    effort            TEXT,
     final_status      TEXT NOT NULL,
     final_credential_id INTEGER NOT NULL,
     error_type        TEXT,
@@ -767,6 +774,7 @@ mod tests {
             key_source: TraceKeySource::ClientKey,
             model: input.model.to_string(),
             is_stream: true,
+            effort: Some("high".to_string()),
             final_status: input.status.to_string(),
             final_credential_id: input.credential_id,
             error_type: if input.status == "success" {

@@ -291,6 +291,20 @@ function CostCell({ rec }: { rec: TraceRecord }) {
   )
 }
 
+function EffortBadge({ effort }: { effort: string }) {
+  const colors: Record<string, string> = {
+    low: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
+    medium: 'bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-400',
+    high: 'bg-amber-50 text-amber-600 dark:bg-amber-950 dark:text-amber-400',
+  }
+  const cls = colors[effort] ?? 'bg-purple-50 text-purple-600 dark:bg-purple-950 dark:text-purple-400'
+  return (
+    <span className={`ml-1.5 inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium ${cls}`}>
+      🧠{effort}
+    </span>
+  )
+}
+
 function TraceRow({ rec }: { rec: TraceRecord }) {
   const [open, setOpen] = useState(false)
   const errStyle = rec.errorType ? outcomeStyle(rec.errorType) : null
@@ -313,6 +327,7 @@ function TraceRow({ rec }: { rec: TraceRecord }) {
         <td className="py-2.5 pr-3 text-[13px]">
           <span className="inline-block max-w-[220px] truncate align-middle">{rec.model}</span>
           {rec.isStream && <Badge variant="outline" className="ml-1.5">流式</Badge>}
+          {rec.effort && <EffortBadge effort={rec.effort} />}
         </td>
         <td className="py-2.5 pr-3 text-[13px]">
           <Badge variant="outline">{keyLabel(rec.keyId, rec.keyName)}</Badge>

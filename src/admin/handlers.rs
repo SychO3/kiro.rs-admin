@@ -1509,6 +1509,7 @@ pub async fn list_traces(
                 "keyName": key_name,
                 "model": r.model,
                 "isStream": r.is_stream,
+                "effort": r.effort,
                 "finalStatus": r.final_status,
                 "finalCredentialId": r.final_credential_id,
                 "finalEmail": final_email,

@@ -531,6 +531,8 @@ export interface TraceRecord {
   keyName?: string | null
   model: string
   isStream: boolean
+  /** 思考强度 (low/medium/high/20k 等) */
+  effort?: string | null
   /** success / error / interrupted */
   finalStatus: string
   finalCredentialId: number

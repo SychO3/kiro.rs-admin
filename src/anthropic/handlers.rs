@@ -138,6 +138,7 @@ pub(crate) struct RequestTracer {
     key_source: TraceKeySource,
     model: String,
     is_stream: bool,
+    effort: Option<String>,
     started_at: Instant,
     /// 首个上游 chunk 到达时刻（仅流式标记；取第一次）
     first_token_at: parking_lot::Mutex<Option<Instant>>,
@@ -166,6 +167,19 @@ struct RequestTraceOptions {
     key_ctx: KeyContext,
     model: String,
     is_stream: bool,
+    effort: Option<String>,
+}
+
+fn resolve_effort(payload: &super::types::MessagesRequest) -> Option<String> {
+    if let Some(oc) = &payload.output_config {
+        return Some(oc.effort.clone());
+    }
+    if let Some(t) = &payload.thinking {
+        if t.is_enabled() {
+            return Some(format!("{}k", t.budget_tokens / 1000));
+        }
+    }
+    None
 }
 
 impl RequestTracer {
@@ -178,6 +192,7 @@ impl RequestTracer {
             key_source: options.key_ctx.key_source,
             model: options.model,
             is_stream: options.is_stream,
+            effort: options.effort,
             started_at: Instant::now(),
             first_token_at: parking_lot::Mutex::new(None),
             attempts: parking_lot::Mutex::new(Vec::new()),
@@ -216,6 +231,7 @@ impl RequestTracer {
             key_source: self.key_source,
             model: self.model.clone(),
             is_stream: self.is_stream,
+            effort: self.effort.clone(),
             final_status: final_status.to_string(),
             final_credential_id,
             error_type: error_type.map(|s| s.to_string()),
@@ -818,6 +834,7 @@ pub async fn post_messages(
             &state,
             RequestTraceOptions {
                 key_ctx: key_ctx.clone(),
+                effort: resolve_effort(&payload),
                 model: payload.model.clone(),
                 is_stream: true,
             },
@@ -843,6 +860,7 @@ pub async fn post_messages(
             &state,
             RequestTraceOptions {
                 key_ctx: key_ctx.clone(),
+                effort: resolve_effort(&payload),
                 model: payload.model.clone(),
                 is_stream: false,
             },
@@ -1664,6 +1682,7 @@ pub async fn post_messages_cc(
             &state,
             RequestTraceOptions {
                 key_ctx: key_ctx.clone(),
+                effort: resolve_effort(&payload),
                 model: payload.model.clone(),
                 is_stream: true,
             },
@@ -1689,6 +1708,7 @@ pub async fn post_messages_cc(
             &state,
             RequestTraceOptions {
                 key_ctx: key_ctx.clone(),
+                effort: resolve_effort(&payload),
                 model: payload.model.clone(),
                 is_stream: false,
             },
