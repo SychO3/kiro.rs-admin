@@ -213,6 +213,8 @@ function TokenCell({ rec }: { rec: TraceRecord }) {
   if (total === 0) {
     return <span className="text-muted-foreground">—</span>
   }
+  const cacheTotal = cacheCreation + cacheRead
+  const cachePercent = total > 0 ? Math.round((cacheTotal / total) * 100) : 0
   const rows: Array<[string, number]> = [
     ['输入 Token', input],
     ['输出 Token', output],
@@ -223,14 +225,21 @@ function TokenCell({ rec }: { rec: TraceRecord }) {
     <TooltipProvider delayDuration={150}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <span className="inline-flex items-center gap-1 font-mono tabular-nums cursor-default border-b border-dotted border-muted-foreground/40">
-            <span className="text-emerald-600 dark:text-emerald-400">
-              ↓{formatTokens(input + cacheCreation + cacheRead)}
+          <div className="inline-flex flex-col gap-0 leading-tight cursor-default border-b border-dotted border-muted-foreground/40">
+            <span className="inline-flex items-center gap-1 font-mono tabular-nums">
+              <span className="text-emerald-600 dark:text-emerald-400">
+                ↓{formatTokens(input + cacheCreation + cacheRead)}
+              </span>
+              <span className="text-violet-600 dark:text-violet-400">
+                ↑{formatTokens(output)}
+              </span>
             </span>
-            <span className="text-violet-600 dark:text-violet-400">
-              ↑{formatTokens(output)}
-            </span>
-          </span>
+            {cacheTotal > 0 && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] font-mono text-cyan-600 dark:text-cyan-400">
+                <span className="text-[9px]">☁</span>{cachePercent}%
+              </span>
+            )}
+          </div>
         </TooltipTrigger>
         <TooltipContent className="p-0">
           <div className="min-w-[180px] px-3 py-2">
