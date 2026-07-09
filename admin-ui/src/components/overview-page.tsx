@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Activity, Calendar, Coins, Cpu, KeyRound, Server } from 'lucide-react'
+import { Activity, Coins, Cpu, KeyRound, Server } from 'lucide-react'
 import { useByCredential, useByModel, useOverview, useTimeSeries } from '@/hooks/use-stats'
 import { useClientKeys } from '@/hooks/use-client-keys'
 import { useGroupOptions } from '@/hooks/use-groups'
@@ -502,13 +502,15 @@ function DateRangeInputs({
   startDate: string
 }) {
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 max-[374px]:grid-cols-1 lg:flex lg:items-center">
-      <DateInput value={startDate} onChange={onStartDateChange} />
-      <span className="text-center text-xs text-muted-foreground max-[374px]:hidden">至</span>
-      <DateInput value={endDate} onChange={onEndDateChange} />
+    <div className="flex flex-col gap-1.5 lg:flex-row lg:items-center">
+      <div className="flex items-center gap-1.5">
+        <DateInput value={startDate} onChange={onStartDateChange} />
+        <span className="shrink-0 text-[10px] text-muted-foreground">至</span>
+        <DateInput value={endDate} onChange={onEndDateChange} />
+      </div>
       <Button
         size="sm"
-        className="col-span-3 h-8 px-3 text-xs max-[374px]:col-span-1 lg:col-span-1"
+        className="h-7 w-full px-2.5 text-xs lg:w-auto"
         disabled={!startDate || !endDate || endDate < startDate}
         onClick={onApply}
       >
@@ -520,15 +522,12 @@ function DateRangeInputs({
 
 function DateInput({ onChange, value }: { onChange: (value: string) => void; value: string }) {
   return (
-    <div className="relative min-w-0">
-      <Calendar className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-      <Input
-        type="date"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-8 min-w-0 w-full rounded-md pl-8 text-xs lg:w-[145px]"
-      />
-    </div>
+    <Input
+      type="date"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="h-7 min-w-0 flex-1 rounded-md px-1.5 text-[10px] sm:text-xs"
+    />
   )
 }
 
@@ -583,14 +582,14 @@ function ModelPanel({
 function ModelTable({ data }: { data: ModelDistribution[] }) {
   return (
     <div className="mt-3 max-h-32 overflow-auto text-[12px]">
-      <table className="min-w-[420px] w-full">
+      <table className="w-full table-fixed">
         <thead className="text-muted-foreground">
           <tr>
-            <th className="text-left font-medium pb-1">模型</th>
-            <th className="text-right font-medium">调用</th>
-            <th className="text-right font-medium">输入</th>
-            <th className="text-right font-medium">输出</th>
-            <th className="text-right font-medium">费用</th>
+            <th className="text-left font-medium pb-1 w-[40%]">模型</th>
+            <th className="text-right font-medium w-[15%]">调用</th>
+            <th className="text-right font-medium w-[15%]">输入</th>
+            <th className="text-right font-medium w-[15%]">输出</th>
+            <th className="text-right font-medium w-[15%]">费用</th>
           </tr>
         </thead>
         <tbody>

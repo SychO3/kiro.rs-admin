@@ -262,6 +262,34 @@ mod tests {
     }
 
     #[test]
+    fn calculate_cost_all_models() {
+        // 验证所有模型定价与官方一致
+        // Opus 4.6: $5/$25, cache_write=$6.25, cache_read=$0.50
+        let cost = calculate_cost("claude-opus-4-6", 0, 0, 1_000_000, 0);
+        assert!((cost - 6.25).abs() < 0.01, "opus cache_write: {cost}");
+
+        // Sonnet 4.6: $3/$15, cache_read=$0.30
+        let cost = calculate_cost("claude-sonnet-4-6", 1_000_000, 0, 0, 0);
+        assert!((cost - 3.0).abs() < 0.01, "sonnet input: {cost}");
+        let cost = calculate_cost("claude-sonnet-4-6", 0, 1_000_000, 0, 0);
+        assert!((cost - 15.0).abs() < 0.01, "sonnet output: {cost}");
+        let cost = calculate_cost("claude-sonnet-4-6", 0, 0, 0, 1_000_000);
+        assert!((cost - 0.3).abs() < 0.01, "sonnet cache_read: {cost}");
+
+        // Haiku 4.5: $1/$5, cache_read=$0.10
+        let cost = calculate_cost("claude-haiku-4-5", 1_000_000, 0, 0, 0);
+        assert!((cost - 1.0).abs() < 0.01, "haiku input: {cost}");
+        let cost = calculate_cost("claude-haiku-4-5", 0, 1_000_000, 0, 0);
+        assert!((cost - 5.0).abs() < 0.01, "haiku output: {cost}");
+
+        // 实际场景：opus, 120k cache_read + 2k input + 5k cache_write + 3k output
+        // = 2000×5/1M + 3000×25/1M + 120000×0.5/1M + 5000×6.25/1M
+        // = 0.01 + 0.075 + 0.06 + 0.03125 = 0.17625
+        let cost = calculate_cost("claude-opus-4-6", 2000, 3000, 5000, 120000);
+        assert!((cost - 0.17625).abs() < 0.001, "real scenario: {cost}");
+    }
+
+    #[test]
     fn normalize_model_names() {
         assert_eq!(normalize_pricing_model("claude-opus-4-6"), "claude-opus-4.6");
         assert_eq!(normalize_pricing_model("claude-opus-4.6"), "claude-opus-4.6");

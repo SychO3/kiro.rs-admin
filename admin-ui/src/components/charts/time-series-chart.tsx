@@ -43,8 +43,8 @@ interface ChartPoint extends TimeSeriesPoint {
 function formatTs(ts: string, granularity: StatsGranularity): string {
   const d = new Date(ts)
   const md = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  if (granularity === 'day') return `${d.getFullYear()}-${md}`
-  return `${d.getFullYear()}-${md} ${String(d.getHours()).padStart(2, '0')}:00`
+  if (granularity === 'day') return md
+  return `${String(d.getHours()).padStart(2, '0')}:00`
 }
 
 /** 命中率 = cacheRead / (input + cacheRead)，无缓存读取时为 0 */
@@ -55,9 +55,9 @@ function calcHitRate(p: TimeSeriesPoint): number {
 }
 
 function pickXAxisInterval(len: number): number | 'preserveStartEnd' {
-  if (len <= 12) return 0
-  if (len <= 48) return Math.ceil(len / 12)
-  return Math.ceil(len / 16)
+  if (len <= 8) return 0
+  if (len <= 24) return Math.ceil(len / 8)
+  return Math.ceil(len / 10)
 }
 
 function ChartTooltip({ active, payload, label }: {
@@ -179,7 +179,7 @@ function TimeSeriesChartImpl({ data, granularity }: Props) {
   return (
     <div className="h-[260px] sm:h-[320px]">
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={formatted} margin={{ top: 16, right: 6, left: -12, bottom: 0 }}>
+        <LineChart data={formatted} margin={{ top: 16, right: 20, left: -12, bottom: 0 }}>
           {chartAxes({ interval, leftAllZero })}
           <Tooltip content={<ChartTooltip />} cursor={tooltipCursorStyle} />
           {chartLegend()}
@@ -202,7 +202,8 @@ function chartAxes({
     <XAxis
       key="x"
       dataKey="label"
-      tick={{ fontSize: 11 }}
+      tick={{ fontSize: 10 }}
+      height={30}
       className="fill-muted-foreground"
       interval={interval}
     />,
