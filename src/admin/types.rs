@@ -873,6 +873,8 @@ pub struct ClientKeyItem {
     pub total_output_tokens: u64,
     pub total_cache_creation_tokens: u64,
     pub total_cache_read_tokens: u64,
+    pub total_credits: f64,
+    pub total_cost: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
     /// 是否系统密钥（config.json apiKey 导入，不可删除 / 不可轮换）

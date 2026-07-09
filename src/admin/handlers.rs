@@ -1003,6 +1003,8 @@ fn key_to_item(k: &super::client_keys::ClientKey) -> ClientKeyItem {
         total_output_tokens: k.total_output_tokens,
         total_cache_creation_tokens: k.total_cache_creation_tokens,
         total_cache_read_tokens: k.total_cache_read_tokens,
+        total_credits: k.total_credits,
+        total_cost: k.total_cost,
         group: k.group.clone(),
         is_system: k.is_system,
     }
