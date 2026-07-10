@@ -747,10 +747,10 @@ pub async fn post_messages(
 
         // 估算输入 tokens
         let input_tokens = token::count_all_tokens(
-            payload.model.clone(),
-            payload.system.clone(),
-            payload.messages.clone(),
-            payload.tools.clone(),
+            &payload.model,
+            payload.system.as_deref(),
+            &payload.messages,
+            payload.tools.as_deref(),
         ) as i32;
 
         let resp = websearch::handle_websearch_request(provider, &payload, input_tokens).await;
@@ -837,10 +837,10 @@ pub async fn post_messages(
 
     // 估算输入 tokens
     let total_input_tokens = token::count_all_tokens(
-        payload.model.clone(),
-        payload.system.clone(),
-        payload.messages.clone(),
-        payload.tools.clone(),
+        &payload.model,
+        payload.system.as_deref(),
+        &payload.messages,
+        payload.tools.as_deref(),
     ) as i32;
 
     // 检查是否启用了thinking
@@ -853,13 +853,9 @@ pub async fn post_messages(
     let tool_name_map = conversion_result.tool_name_map;
     let known_tool_names = conversion_result.known_tool_names;
 
-    // CacheMeter：根据 cache_control 断点查 / 写中转层提示词缓存。
+    // CacheMeter 计费不再在此预计算：移入下游 handler 与上游请求并发，避免推迟首字节。
     // 返回 estimate 口径的覆盖量；真实 input/cache 互斥分摊在拿到 total 真值时进行。
-    let cache_usage = state
-        .cache_meter
-        .as_ref()
-        .map(|cache| super::cache_metering::compute_cache_usage(cache, &payload, key_ctx.key_id))
-        .unwrap_or_default();
+    let cache_meter = state.cache_meter.as_ref();
 
     if payload.stream {
         // 流式响应
@@ -881,7 +877,8 @@ pub async fn post_messages(
             tool_name_map,
             known_tool_names,
             hook,
-            cache_usage,
+            cache_meter,
+            &payload,
             tracer,
             key_ctx.group.clone(),
             key_ctx.key_id,
@@ -908,7 +905,8 @@ pub async fn post_messages(
             tool_name_map,
             known_tool_names,
             hook,
-            cache_usage,
+            cache_meter,
+            &payload,
             tracer,
             key_ctx.group.clone(),
             key_ctx.key_id,
@@ -927,16 +925,29 @@ async fn handle_stream_request(
     tool_name_map: std::collections::HashMap<String, String>,
     known_tool_names: std::collections::HashSet<String>,
     hook: UsageRecordHook,
-    cache_usage: super::cache_metering::CacheUsage,
+    cache_meter: Option<&super::cache_metering::SharedCacheMeter>,
+    payload: &super::types::MessagesRequest,
     tracer: std::sync::Arc<RequestTracer>,
     group: Option<String>,
     client_key_id: u64,
 ) -> Response {
-    // 调用 Kiro API（支持多凭据故障转移）
-    let call_result = match provider
-        .call_api_stream(request_body, Some(tracer.as_ref()), group.as_deref(), Some(client_key_id))
-        .await
-    {
+    // 调用 Kiro API 与 CacheMeter 计费并发：join! 先 poll 上游 future（发起连接后遇 await
+    // 让出），再 poll cache future（同步跑完 CPU 计算），使缓存估算 overlap 到上游 RTT 里。
+    let cache_fut = async {
+        cache_meter
+            .map(|cache| super::cache_metering::compute_cache_usage(cache, payload, client_key_id))
+            .unwrap_or_default()
+    };
+    let (call_result, cache_usage) = tokio::join!(
+        provider.call_api_stream(
+            request_body,
+            Some(tracer.as_ref()),
+            group.as_deref(),
+            Some(client_key_id)
+        ),
+        cache_fut,
+    );
+    let call_result = match call_result {
         Ok(resp) => resp,
         Err(e) => {
             hook.record(0, input_tokens, 0, 0, 0, 0.0, "error");
@@ -1174,16 +1185,28 @@ async fn handle_non_stream_request(
     // 因此这里不需要工具表校验；保留参数以对齐调用方签名。
     _known_tool_names: std::collections::HashSet<String>,
     hook: UsageRecordHook,
-    cache_usage: super::cache_metering::CacheUsage,
+    cache_meter: Option<&super::cache_metering::SharedCacheMeter>,
+    payload: &super::types::MessagesRequest,
     tracer: std::sync::Arc<RequestTracer>,
     group: Option<String>,
     client_key_id: u64,
 ) -> Response {
-    // 调用 Kiro API（支持多凭据故障转移）
-    let call_result = match provider
-        .call_api(request_body, Some(tracer.as_ref()), group.as_deref(), Some(client_key_id))
-        .await
-    {
+    // 调用 Kiro API 与 CacheMeter 计费并发（见 handle_stream_request 说明）。
+    let cache_fut = async {
+        cache_meter
+            .map(|cache| super::cache_metering::compute_cache_usage(cache, payload, client_key_id))
+            .unwrap_or_default()
+    };
+    let (call_result, cache_usage) = tokio::join!(
+        provider.call_api(
+            request_body,
+            Some(tracer.as_ref()),
+            group.as_deref(),
+            Some(client_key_id)
+        ),
+        cache_fut,
+    );
+    let call_result = match call_result {
         Ok(resp) => resp,
         Err(e) => {
             hook.record(0, input_tokens, 0, 0, 0, 0.0, "error");
@@ -1550,10 +1573,10 @@ pub async fn count_tokens(
     );
 
     let total_tokens = token::count_all_tokens(
-        payload.model,
-        payload.system,
-        payload.messages,
-        payload.tools,
+        &payload.model,
+        payload.system.as_deref(),
+        &payload.messages,
+        payload.tools.as_deref(),
     ) as i32;
 
     Json(CountTokensResponse {
@@ -1627,10 +1650,10 @@ pub async fn post_messages_cc(
 
         // 估算输入 tokens
         let input_tokens = token::count_all_tokens(
-            payload.model.clone(),
-            payload.system.clone(),
-            payload.messages.clone(),
-            payload.tools.clone(),
+            &payload.model,
+            payload.system.as_deref(),
+            &payload.messages,
+            payload.tools.as_deref(),
         ) as i32;
 
         let resp = websearch::handle_websearch_request(provider, &payload, input_tokens).await;
@@ -1716,10 +1739,10 @@ pub async fn post_messages_cc(
 
     // 计算总 input tokens
     let total_input_tokens = token::count_all_tokens(
-        payload.model.clone(),
-        payload.system.clone(),
-        payload.messages.clone(),
-        payload.tools.clone(),
+        &payload.model,
+        payload.system.as_deref(),
+        &payload.messages,
+        payload.tools.as_deref(),
     ) as i32;
 
     // 检查是否启用了thinking
@@ -1732,12 +1755,8 @@ pub async fn post_messages_cc(
     let tool_name_map = conversion_result.tool_name_map;
     let known_tool_names = conversion_result.known_tool_names;
 
-    // CacheMeter：根据 cache_control 断点查 / 写中转层提示词缓存（estimate 口径）。
-    let cache_usage = state
-        .cache_meter
-        .as_ref()
-        .map(|cache| super::cache_metering::compute_cache_usage(cache, &payload, key_ctx.key_id))
-        .unwrap_or_default();
+    // CacheMeter 计费不再在此预计算：移入下游 handler 与上游请求并发，避免推迟首字节。
+    let cache_meter = state.cache_meter.as_ref();
 
     if payload.stream {
         // 流式响应（缓冲模式）
@@ -1759,7 +1778,8 @@ pub async fn post_messages_cc(
             known_tool_names,
             hook,
             total_input_tokens,
-            cache_usage,
+            cache_meter,
+            &payload,
             tracer,
             key_ctx.group.clone(),
             key_ctx.key_id,
@@ -1786,7 +1806,8 @@ pub async fn post_messages_cc(
             tool_name_map,
             known_tool_names,
             hook,
-            cache_usage,
+            cache_meter,
+            &payload,
             tracer,
             key_ctx.group.clone(),
             key_ctx.key_id,
@@ -1808,16 +1829,28 @@ async fn handle_stream_request_buffered(
     known_tool_names: std::collections::HashSet<String>,
     hook: UsageRecordHook,
     fallback_input_tokens: i32,
-    cache_usage: super::cache_metering::CacheUsage,
+    cache_meter: Option<&super::cache_metering::SharedCacheMeter>,
+    payload: &super::types::MessagesRequest,
     tracer: std::sync::Arc<RequestTracer>,
     group: Option<String>,
     client_key_id: u64,
 ) -> Response {
-    // 调用 Kiro API（支持多凭据故障转移）
-    let call_result = match provider
-        .call_api_stream(request_body, Some(tracer.as_ref()), group.as_deref(), Some(client_key_id))
-        .await
-    {
+    // 调用 Kiro API 与 CacheMeter 计费并发（见 handle_stream_request 说明）。
+    let cache_fut = async {
+        cache_meter
+            .map(|cache| super::cache_metering::compute_cache_usage(cache, payload, client_key_id))
+            .unwrap_or_default()
+    };
+    let (call_result, cache_usage) = tokio::join!(
+        provider.call_api_stream(
+            request_body,
+            Some(tracer.as_ref()),
+            group.as_deref(),
+            Some(client_key_id)
+        ),
+        cache_fut,
+    );
+    let call_result = match call_result {
         Ok(resp) => resp,
         Err(e) => {
             hook.record(0, fallback_input_tokens, 0, 0, 0, 0.0, "error");

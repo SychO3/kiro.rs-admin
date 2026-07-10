@@ -19,10 +19,14 @@
 //! - On decode failure **keep the original image** and log a warning; a bad image must never fail the whole request
 //! - Everything is driven by `KIRO_RS_IMAGE_*` env vars, sharing the same contract as the observability env-var family
 
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::io::Cursor;
+use std::sync::OnceLock;
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use image::{ImageFormat, ImageReader, imageops::FilterType};
+use parking_lot::Mutex;
 use tracing::{debug, warn};
 
 /// Default long-side threshold (Anthropic's recommended value)
@@ -203,14 +207,52 @@ const IMAGE_TOKEN_PIXELS_PER_TOKEN: f64 = 750.0;
 /// 头部解析失败时的保底 token 数（避免把图片当 0 token，破坏 cache 口径精度）。
 const IMAGE_TOKEN_FALLBACK: u32 = 1_600;
 
+/// 图片 token 估算缓存上限（条）。多轮对话里历史图片逐字节不变，每轮都会被
+/// cache metering / token 计数重复调用 `estimate_image_tokens`，缓存后省掉重复
+/// base64 解码 + 图片头解析。超限时整表清空重来（简单够用：本轮内复用即可）。
+const IMAGE_TOKEN_CACHE_CAP: usize = 512;
+
+/// `(media_type, data_base64)` hash → 估算 token 数。
+static IMAGE_TOKEN_CACHE: OnceLock<Mutex<HashMap<u64, u32>>> = OnceLock::new();
+
+/// 对 `(media_type, data_base64)` 求缓存 key。hash 是 O(n)，但比 base64 解码 +
+/// 图片头解析便宜，且避免了重复解码时的内存分配。
+fn image_cache_key(media_type: &str, data_base64: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    media_type.hash(&mut hasher);
+    data_base64.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// 估算单张图片的输入 token，对齐 Anthropic 计费口径 `tokens ≈ (w×h)/750`。
 ///
 /// 只读图片头拿宽高（<1ms，不解码像素）；超过长边上限时按等比缩放后的尺寸计算
 /// （与上游对大图下采样后再计费一致）。头部无法解析时退回固定保底值，确保图片
 /// 始终贡献非零 token —— 这对 prompt cache 的 creation/read 数值精度至关重要。
 ///
+/// 结果按 `(media_type, data_base64)` 缓存：多轮对话历史图片每轮重复调用时直接命中，
+/// 省掉重复解码。
+///
 /// `media_type` 形如 "image/png"；`data_base64` 是原始 base64 数据。
 pub fn estimate_image_tokens(media_type: &str, data_base64: &str) -> u32 {
+    let key = image_cache_key(media_type, data_base64);
+    let cache = IMAGE_TOKEN_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(&tokens) = cache.lock().get(&key) {
+        return tokens;
+    }
+
+    let tokens = estimate_image_tokens_uncached(media_type, data_base64);
+
+    let mut guard = cache.lock();
+    if guard.len() >= IMAGE_TOKEN_CACHE_CAP {
+        guard.clear();
+    }
+    guard.insert(key, tokens);
+    tokens
+}
+
+/// 实际估算逻辑（无缓存）。
+fn estimate_image_tokens_uncached(media_type: &str, data_base64: &str) -> u32 {
     let format = media_type
         .rsplit('/')
         .next()
@@ -387,6 +429,18 @@ mod tests {
         // 非法 base64 / 无法解析头 → 保底非零，绝不返回 0。
         let tokens = estimate_image_tokens("image/png", "not-valid-base64!!!");
         assert_eq!(tokens, IMAGE_TOKEN_FALLBACK);
+    }
+
+    #[test]
+    fn estimate_image_tokens_cache_is_consistent() {
+        // 同一图片两次调用结果必须一致（第二次命中缓存，不能因缓存改变结果）。
+        let img = make_png(750, 750);
+        let first = estimate_image_tokens("image/png", &img);
+        let second = estimate_image_tokens("image/png", &img);
+        assert_eq!(first, second, "缓存命中结果应与首次计算一致");
+        assert_eq!(first, 750);
+        // 缓存值必须等于无缓存直算值。
+        assert_eq!(first, estimate_image_tokens_uncached("image/png", &img));
     }
 
     #[test]

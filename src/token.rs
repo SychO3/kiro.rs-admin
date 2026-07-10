@@ -74,17 +74,20 @@ pub fn count_tokens(text: &str) -> u64 {
 }
 
 /// 估算请求的输入 tokens（优先远程 API，回退本地 BPE）
+///
+/// 全部按引用收参：避免每次调用深拷贝整段会话（几百条消息）。远程路径在内部
+/// 按需 clone 构造请求体，本地路径全程只读引用。
 pub(crate) fn count_all_tokens(
-    model: String,
-    system: Option<Vec<SystemMessage>>,
-    messages: Vec<Message>,
-    tools: Option<Vec<Tool>>,
+    model: &str,
+    system: Option<&[SystemMessage]>,
+    messages: &[Message],
+    tools: Option<&[Tool]>,
 ) -> u64 {
     if let Some(config) = get_config() {
         if let Some(api_url) = &config.api_url {
             let result = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(call_remote_count_tokens(
-                    api_url, config, model, &system, &messages, &tools,
+                    api_url, config, model, system, messages, tools,
                 ))
             });
             match result {
@@ -104,17 +107,17 @@ pub(crate) fn count_all_tokens(
 async fn call_remote_count_tokens(
     api_url: &str,
     config: &CountTokensConfig,
-    model: String,
-    system: &Option<Vec<SystemMessage>>,
+    model: &str,
+    system: Option<&[SystemMessage]>,
     messages: &[Message],
-    tools: &Option<Vec<Tool>>,
+    tools: Option<&[Tool]>,
 ) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
     let client = build_client(config.proxy.as_ref(), 300, config.tls_backend)?;
     let request = CountTokensRequest {
-        model,
+        model: model.to_string(),
         messages: messages.to_vec(),
-        system: system.clone(),
-        tools: tools.clone(),
+        system: system.map(|s| s.to_vec()),
+        tools: tools.map(|t| t.to_vec()),
     };
     let mut req_builder = client.post(api_url);
     if let Some(api_key) = &config.api_key {
@@ -137,20 +140,20 @@ async fn call_remote_count_tokens(
 }
 
 fn count_all_tokens_local(
-    system: Option<Vec<SystemMessage>>,
-    messages: Vec<Message>,
-    tools: Option<Vec<Tool>>,
+    system: Option<&[SystemMessage]>,
+    messages: &[Message],
+    tools: Option<&[Tool]>,
 ) -> u64 {
     let enc = encoder();
     let mut total: usize = 0;
 
-    if let Some(ref system) = system {
+    if let Some(system) = system {
         for msg in system {
             total += enc.count(&msg.text);
         }
     }
 
-    for msg in &messages {
+    for msg in messages {
         if let serde_json::Value::String(s) = &msg.content {
             total += enc.count(s);
         } else if let serde_json::Value::Array(arr) = &msg.content {
@@ -162,7 +165,7 @@ fn count_all_tokens_local(
         }
     }
 
-    if let Some(ref tools) = tools {
+    if let Some(tools) = tools {
         for tool in tools {
             total += enc.count(&tool.name);
             total += enc.count(&tool.description);
