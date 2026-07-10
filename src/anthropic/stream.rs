@@ -270,6 +270,53 @@ fn find_real_thinking_end_tag_at_buffer_end(buffer: &str) -> Option<usize> {
     None
 }
 
+/// 仅代码 / 字符串包裹字符：反引号、双引号、单引号。用于结束标签的**窄**引用判定。
+/// 与 `QUOTE_CHARS` 不同——后者把几乎所有标点都算引用字符，会把 `OK.</thinking>` 这种
+/// 正常句尾误判为「被引用」，导致结束标签识别不出而整段泄漏。
+fn is_code_quote_char(buffer: &str, pos: usize) -> bool {
+    matches!(buffer.as_bytes().get(pos), Some(b'`') | Some(b'"') | Some(b'\''))
+}
+
+/// 宽松查找 `</thinking>` 结束标签：只要标签**完整出现**且未被代码/字符串引号包裹即认定结束，
+/// **不要求**后面跟 `\n\n`。
+///
+/// 修复「`</thinking>` 及整段 thinking 泄漏成可见正文」的根因：上游在 `</thinking>` 后
+/// 可能直接跟正文、只跟单个 `\n`、或标签正好切在流分片边界——这些情况下严格版
+/// （要求 `\n\n`）永远返回 None，标签与其后正文全被吞进 thinking 块。宽松版只依赖标签本身，
+/// 仅用**窄**引用判定（反引号/引号）避免误判，允许标签前是句号等正常标点。
+fn find_thinking_end_tag_lenient(buffer: &str) -> Option<usize> {
+    const TAG: &str = "</thinking>";
+    let mut search_start = 0;
+    while let Some(pos) = buffer[search_start..].find(TAG) {
+        let absolute_pos = search_start + pos;
+        let has_quote_before = absolute_pos > 0 && is_code_quote_char(buffer, absolute_pos - 1);
+        let after_pos = absolute_pos + TAG.len();
+        let has_quote_after = is_code_quote_char(buffer, after_pos);
+        if has_quote_before || has_quote_after {
+            search_start = absolute_pos + 1;
+            continue;
+        }
+        return Some(absolute_pos);
+    }
+    None
+}
+
+/// 缓冲区末尾若是 `</thinking>` 的真前缀（如 `</thin`），返回该前缀起始位置。
+/// 用于流式分片边界：标签被切成两半时保留前半段等待下一分片，避免半截标签被当作
+/// thinking 内容发出。整标签由 `find_thinking_end_tag_lenient` 处理，这里只管「部分尾巴」。
+fn thinking_end_tag_partial_suffix_start(buffer: &str) -> Option<usize> {
+    const TAG: &str = "</thinking>";
+    // 从最长可能前缀（TAG.len()-1）向下试：末尾是否等于 TAG 的某个前缀。
+    let max = (TAG.len() - 1).min(buffer.len());
+    for n in (1..=max).rev() {
+        let start = buffer.len() - n;
+        if buffer.is_char_boundary(start) && buffer[start..] == TAG[..n] {
+            return Some(start);
+        }
+    }
+    None
+}
+
 /// 查找真正的 thinking 开始标签（不被引用字符包裹）
 ///
 /// 与 `find_real_thinking_end_tag` 类似，跳过被引用字符包裹的开始标签。
@@ -727,7 +774,7 @@ pub(crate) fn extract_thinking_from_complete_text(text: &str) -> (Option<String>
     let before = &text[..start_pos];
     let after_open = &text[start_pos + "<thinking>".len()..];
 
-    // 查找结束标签：优先匹配带 \n\n 后缀的，退而使用末尾匹配
+    // 查找结束标签：优先匹配带 \n\n 后缀的，退而使用末尾匹配，最后宽松匹配。
     let (thinking_raw, text_after) = if let Some(end_pos) = find_real_thinking_end_tag(after_open) {
         (
             &after_open[..end_pos],
@@ -736,6 +783,15 @@ pub(crate) fn extract_thinking_from_complete_text(text: &str) -> (Option<String>
     } else if let Some(end_pos) = find_real_thinking_end_tag_at_buffer_end(after_open) {
         let after_tag = end_pos + "</thinking>".len();
         (&after_open[..end_pos], after_open[after_tag..].trim_start())
+    } else if let Some(end_pos) = find_thinking_end_tag_lenient(after_open) {
+        // 宽松兜底：`</thinking>` 后直接跟正文 / 单 \n（无 \n\n）时，严格版失败，
+        // 会把整段 thinking + 正文当作可见文本泄漏。这里剥标签 + 最多 2 个换行。
+        let after_tag = end_pos + "</thinking>".len();
+        let mut rest = &after_open[after_tag..];
+        for _ in 0..2 {
+            rest = rest.strip_prefix('\n').unwrap_or(rest);
+        }
+        (&after_open[..end_pos], rest)
     } else {
         // 找不到有效的结束标签，不做提取
         return (None, text.to_string());
@@ -1510,6 +1566,10 @@ pub struct StreamContext {
     /// 是否需要剥离 thinking 内容开头的换行符
     /// 模型输出 `<thinking>\n` 时，`\n` 可能与标签在同一 chunk 或下一 chunk
     strip_thinking_leading_newline: bool,
+    /// `</thinking>` 之后待剥离的换行符数量（Anthropic 格式为 `</thinking>\n\n`）。
+    /// 结束标签命中时置为 2；这些换行可能跨 chunk 到达，故用计数器逐个剥离，
+    /// 剥完（或遇到非换行）才把剩余内容作为正文发出，避免分隔符换行泄漏成正文前导。
+    strip_thinking_trailing_newlines: u8,
     /// 中转层 CacheMeter 的缓存覆盖情况（estimate 口径）。最终上报时按真实 total
     /// 做互斥分摊：`input + cache_creation + cache_read == total`，避免把被缓存
     /// 覆盖的前缀重复计进 input_tokens。
@@ -1579,6 +1639,7 @@ impl StreamContext {
             pending_thinking_signature: None,
             text_block_index: None,
             strip_thinking_leading_newline: false,
+            strip_thinking_trailing_newlines: 0,
             cache_usage: super::cache_metering::CacheUsage::default(),
             credits: 0.0,
             repeat_guard_last_line: String::new(),
@@ -1810,8 +1871,9 @@ impl StreamContext {
                     // buffer 为空时保留标志，等待下一个 chunk
                 }
 
-                // 在 thinking 块内，查找 </thinking> 结束标签（跳过被反引号包裹的）
-                if let Some(end_pos) = find_real_thinking_end_tag(&self.thinking_buffer) {
+                // 在 thinking 块内，用宽松匹配器查找 </thinking>（不再强制后跟 `\n\n`，
+                // 修复「结束标签后直接跟正文 / 单 \n / 分片边界」导致整段 thinking 泄漏成正文）。
+                if let Some(end_pos) = find_thinking_end_tag_lenient(&self.thinking_buffer) {
                     // 提取 thinking 内容
                     let thinking_content = self.thinking_buffer[..end_pos].to_string();
                     if !thinking_content.is_empty() {
@@ -1840,23 +1902,19 @@ impl StreamContext {
                         }
                     }
 
-                    // 剥离 `</thinking>\n\n`（find_real_thinking_end_tag 已确认 \n\n 存在）
+                    // 剥离 `</thinking>` 本体，其后紧邻的换行符（Anthropic 格式 `\n\n`）
+                    // 交给 strip_thinking_trailing_newlines 计数器跨 chunk 逐个剥离。
                     self.thinking_buffer =
-                        self.thinking_buffer[end_pos + "</thinking>\n\n".len()..].to_string();
+                        self.thinking_buffer[end_pos + "</thinking>".len()..].to_string();
+                    self.strip_thinking_trailing_newlines = 2;
                 } else {
-                    // 没有找到结束标签，发送当前缓冲区内容作为 thinking_delta。
-                    // 保留末尾可能是部分 `</thinking>\n\n` 的内容：
-                    // find_real_thinking_end_tag 要求标签后有 `\n\n` 才返回 Some，
-                    // 因此保留区必须覆盖 `</thinking>\n\n` 的完整长度（13 字节），
-                    // 否则当 `</thinking>` 已在 buffer 但 `\n\n` 尚未到达时，
-                    // 标签的前几个字符会被错误地作为 thinking_delta 发出。
-                    let target_len = self
-                        .thinking_buffer
-                        .len()
-                        .saturating_sub("</thinking>\n\n".len());
-                    let safe_len = find_char_boundary(&self.thinking_buffer, target_len);
-                    if safe_len > 0 {
-                        let safe_content = self.thinking_buffer[..safe_len].to_string();
+                    // 没有找到完整结束标签：发出缓冲内容作为 thinking_delta，
+                    // 但保留末尾可能是「部分 </thinking>」的尾巴（分片边界切开标签），
+                    // 避免半截标签被当作 thinking 内容发出。
+                    let hold_start = thinking_end_tag_partial_suffix_start(&self.thinking_buffer)
+                        .unwrap_or(self.thinking_buffer.len());
+                    if hold_start > 0 {
+                        let safe_content = self.thinking_buffer[..hold_start].to_string();
                         if !safe_content.is_empty() {
                             if let Some(thinking_index) = self.thinking_block_index {
                                 events.push(
@@ -1864,12 +1922,26 @@ impl StreamContext {
                                 );
                             }
                         }
-                        self.thinking_buffer = self.thinking_buffer[safe_len..].to_string();
+                        self.thinking_buffer = self.thinking_buffer[hold_start..].to_string();
                     }
                     break;
                 }
             } else {
-                // thinking 已提取完成，剩余内容作为 text_delta
+                // thinking 已提取完成。先剥离 `</thinking>` 后残留的分隔换行符
+                // （可能跨 chunk 到达），剥完或遇到非换行/缓冲耗尽才把剩余作为正文。
+                while self.strip_thinking_trailing_newlines > 0 {
+                    if self.thinking_buffer.starts_with('\n') {
+                        self.thinking_buffer = self.thinking_buffer[1..].to_string();
+                        self.strip_thinking_trailing_newlines -= 1;
+                    } else if self.thinking_buffer.is_empty() {
+                        // 换行尚未到达，保留计数等待下一 chunk
+                        break;
+                    } else {
+                        // buffer 非空但不以 \n 开头：分隔换行已用尽，停止剥离
+                        self.strip_thinking_trailing_newlines = 0;
+                    }
+                }
+                // 剩余内容作为 text_delta
                 if !self.thinking_buffer.is_empty() {
                     let remaining = self.thinking_buffer.clone();
                     self.thinking_buffer.clear();
@@ -3794,6 +3866,61 @@ mod tests {
             full_text
         );
         assert_eq!(full_text, "你好");
+    }
+
+    // 复现真实泄漏：thinking 内容含 XML 标签(`<parameter>`/`</parameter>`)、且 `</thinking>`
+    // 后无 `\n\n`（直接跟正文 / 单 \n / 分片边界）。打印 text 与 thinking，断言无标签泄漏。
+    #[test]
+    fn repro_thinking_and_param_tag_leak() {
+        let run = |chunks: &[&str]| -> (String, String) {
+            let mut ctx = StreamContext::new_with_thinking(
+                "m", 1, true, HashMap::new(), test_known_tools(),
+            );
+            let _ = ctx.generate_initial_events();
+            let mut ev = Vec::new();
+            for c in chunks {
+                ev.extend(ctx.process_assistant_response(c));
+            }
+            ev.extend(ctx.generate_final_events());
+            (collect_text_content(&ev), collect_thinking_content(&ev))
+        };
+
+        // A: </thinking> 后直接跟正文，无换行
+        let (ta, ka) = run(&["<thinking>\nreasoning</thinking>答案"]);
+        println!("[A no-newline]  text={:?}\n              think={:?}", ta, ka);
+        // B: </thinking> 后只有单个 \n
+        let (tb, kb) = run(&["<thinking>\nreasoning</thinking>\n答案"]);
+        println!("[B single-\\n]   text={:?}\n              think={:?}", tb, kb);
+        // C: 分片边界——</thinking> 与 \n\n 分在不同 chunk
+        let (tc, kc) = run(&["<thinking>\nreasoning</thinking>", "\n\n答案"]);
+        println!("[C split-chunk] text={:?}\n              think={:?}", tc, kc);
+        // D: thinking 内含 </parameter> 字面量（真实场景），随后 </thinking> 无 \n\n
+        let (td, kd) = run(&["<thinking>\nLet me write the step.</parameter>\nOK.</thinking>正文"]);
+        println!("[D param-tag]   text={:?}\n              think={:?}", td, kd);
+
+        for (tag, t, k) in [("A", &ta, &ka), ("B", &tb, &kb), ("C", &tc, &kc), ("D", &td, &kd)] {
+            assert!(!t.contains("</thinking>"), "{} 正文泄漏 </thinking>: {:?}", tag, t);
+            assert!(!k.contains("</thinking>"), "{} thinking 泄漏 </thinking>: {:?}", tag, k);
+        }
+    }
+
+    // 非流式路径：`</thinking>` 后无 \n\n 时也应正确提取，不泄漏。
+    #[test]
+    fn repro_nonstream_thinking_extract_without_double_newline() {
+        // A: 直接跟正文
+        let (t, r) = extract_thinking_from_complete_text("<thinking>\nreasoning</thinking>答案");
+        assert_eq!(t.as_deref(), Some("reasoning"));
+        assert_eq!(r, "答案");
+        // B: 单个 \n
+        let (t, r) = extract_thinking_from_complete_text("<thinking>\nreasoning</thinking>\n答案");
+        assert_eq!(t.as_deref(), Some("reasoning"));
+        assert_eq!(r, "答案");
+        // C: thinking 含句号 + </parameter>，</thinking> 后直接跟正文
+        let (t, r) = extract_thinking_from_complete_text(
+            "<thinking>\nLet me write the step.</parameter>\nOK.</thinking>正文",
+        );
+        assert_eq!(t.as_deref(), Some("Let me write the step.</parameter>\nOK."));
+        assert_eq!(r, "正文");
     }
 
     /// 辅助函数：从事件列表中提取所有 thinking_delta 的拼接内容
