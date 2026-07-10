@@ -47,10 +47,10 @@ function ChartContent({ data }: { data: ChartDatum[] }) {
   return (
     <div className="h-[280px] sm:h-[340px]">
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 8, right: 8, left: -10, bottom: 24 }}>
+        <BarChart data={data} margin={{ top: 8, right: 8, left: 8, bottom: 24 }}>
           <CartesianGrid strokeDasharray="3 3" className="stroke-border/50" />
           <XAxis dataKey="endpoint" tick={{ fontSize: 11 }} interval={0} height={32} />
-          <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${v}ms`} width={54} />
+          <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${v}ms`} width={64} />
           <Tooltip
             contentStyle={tooltipContentStyle}
             labelStyle={tooltipLabelStyle}
