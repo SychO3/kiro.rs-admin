@@ -1,5 +1,13 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { getByCredential, getByModel, getOverview, getTimeSeries } from '@/api/stats'
+import {
+  getBalanceSeries,
+  getByCredential,
+  getByModel,
+  getCredentialHealth,
+  getEndpointLatency,
+  getOverview,
+  getTimeSeries,
+} from '@/api/stats'
 import type { StatsFilter, StatsTimeFilter } from '@/types/api'
 
 /**
@@ -54,6 +62,31 @@ export function useByCredential(time: StatsTimeFilter, filter?: StatsFilter) {
   return useQuery({
     queryKey: ['stats', 'by-credential', ...timeKey(time), filter?.keyId ?? 'all', filter?.group ?? 'all'],
     queryFn: () => getByCredential(time, filter),
+    ...COMMON,
+  })
+}
+
+export function useEndpointLatency(time: StatsTimeFilter) {
+  return useQuery({
+    queryKey: ['stats', 'endpoint-latency', ...timeKey(time)],
+    queryFn: () => getEndpointLatency(time),
+    ...COMMON,
+  })
+}
+
+export function useCredentialHealth(time: StatsTimeFilter) {
+  return useQuery({
+    queryKey: ['stats', 'credential-health', ...timeKey(time)],
+    queryFn: () => getCredentialHealth(time),
+    ...COMMON,
+  })
+}
+
+export function useBalanceSeries(credentialId: number | null, time: StatsTimeFilter) {
+  return useQuery({
+    queryKey: ['stats', 'balance-series', credentialId ?? 'none', ...timeKey(time)],
+    queryFn: () => getBalanceSeries(credentialId as number, time),
+    enabled: credentialId != null,
     ...COMMON,
   })
 }

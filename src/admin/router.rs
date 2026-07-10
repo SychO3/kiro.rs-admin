@@ -13,7 +13,7 @@ use super::{
         complete_social_login, complete_social_relogin, create_client_key, create_group,
         delete_client_key, delete_credential, delete_group, delete_proxy, delete_user_preset,
         disable_quota_exceeded, enable_overage_all, export_credentials, force_refresh_token,
-        get_account_throttle_config, get_all_credentials, get_credential_balance,
+        get_account_throttle_config, get_adaptive_rpm, get_all_credentials, get_credential_balance,
         get_credential_models, get_global_proxy, get_load_balancing_mode,
         get_log_governance_config, get_prompt_filter_config, get_proxy_balancing_mode,
         get_system_prompt, delete_model_mapping, get_proxy_pool, get_retry_policy,
@@ -23,12 +23,14 @@ use super::{
         pull_update_image, reset_all_success_count, reset_client_key_stats, reset_failure_count,
         refresh_models, update_prompt_filter_config, update_system_prompt,
         reset_success_count, rollback_image_update, rotate_client_key, set_account_throttle_config,
+        set_adaptive_rpm,
         set_client_key_disabled, set_credential_disabled, set_credential_overage,
         set_credential_priority, set_global_proxy, set_load_balancing_mode,
         set_log_governance_config, set_proxy_balancing_mode, set_proxy_enabled, set_retry_policy,
         set_update_config, start_idc_login, start_idc_relogin, start_social_login,
-        start_social_relogin, stats_by_credential, stats_by_model, stats_overview,
-        stats_timeseries, test_credential_response, trace_failure_stats, update_admin_key,
+        start_social_relogin, stats_balance_series, stats_by_credential, stats_by_model,
+        stats_credential_health, stats_endpoint_latency, stats_overview, stats_timeseries,
+        test_credential_response, trace_failure_stats, update_admin_key,
         update_client_key, update_credential, update_group, update_refresh_token,
         webshare_replace, webshare_sync,
     },
@@ -109,6 +111,10 @@ pub fn create_admin_router(state: AdminState) -> Router {
         .route(
             "/config/account-throttle",
             get(get_account_throttle_config).put(set_account_throttle_config),
+        )
+        .route(
+            "/config/adaptive-rpm",
+            get(get_adaptive_rpm).put(set_adaptive_rpm),
         )
         .route(
             "/config/retry-policy",
@@ -198,6 +204,9 @@ pub fn create_admin_router(state: AdminState) -> Router {
         .route("/stats/timeseries", get(stats_timeseries))
         .route("/stats/by-model", get(stats_by_model))
         .route("/stats/by-credential", get(stats_by_credential))
+        .route("/stats/endpoint-latency", get(stats_endpoint_latency))
+        .route("/stats/credential-health", get(stats_credential_health))
+        .route("/stats/balance-series", get(stats_balance_series))
         .route("/traces/failure-stats", get(trace_failure_stats))
         .route("/traces", get(list_traces).delete(clear_traces))
         .layer(middleware::from_fn_with_state(

@@ -3,12 +3,21 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Activity, Coins, Cpu, KeyRound, Server } from 'lucide-react'
-import { useByCredential, useByModel, useOverview, useTimeSeries } from '@/hooks/use-stats'
+import {
+  useByCredential,
+  useByModel,
+  useCredentialHealth,
+  useEndpointLatency,
+  useOverview,
+  useTimeSeries,
+} from '@/hooks/use-stats'
 import { useClientKeys } from '@/hooks/use-client-keys'
 import { useGroupOptions } from '@/hooks/use-groups'
 import type {
   ClientKeyItem,
   CredentialDistribution,
+  CredentialHealth,
+  EndpointLatency,
   ModelDistribution,
   StatsFilter,
   StatsGranularity,
@@ -19,6 +28,7 @@ import type {
 import { TimeSeriesChart } from '@/components/charts/time-series-chart'
 import { ModelPieChart } from '@/components/charts/model-pie-chart'
 import { CredentialBarChart } from '@/components/charts/credential-bar-chart'
+import { EndpointLatencyChart } from '@/components/charts/endpoint-latency-chart'
 import { cn, formatCost, formatCredits, formatNumber } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import {
@@ -83,9 +93,13 @@ export function OverviewPage() {
   const { data: series } = useTimeSeries(filters.timeFilter, filters.statsFilter)
   const { data: byModel } = useByModel(filters.timeFilter, filters.statsFilter)
   const { data: byCred } = useByCredential(filters.timeFilter, filters.statsFilter)
+  const { data: endpointLatency } = useEndpointLatency(filters.timeFilter)
+  const { data: credHealth } = useCredentialHealth(filters.timeFilter)
   const seriesData = useMemo(() => series ?? [], [series])
   const modelData = useMemo(() => byModel ?? [], [byModel])
   const credData = useMemo(() => byCred ?? [], [byCred])
+  const endpointData = useMemo(() => endpointLatency ?? [], [endpointLatency])
+  const healthData = useMemo(() => credHealth ?? [], [credHealth])
   const rangeStats = useMemo(() => aggregateSeries(seriesData), [seriesData])
   const selectedKeyLabel = selectedStatsKeyLabel(filters.keyFilter, keysData?.keys ?? [])
   const groupFilterActive = filters.groupFilter !== 'all'
@@ -128,7 +142,111 @@ export function OverviewPage() {
         timeText={timeLabel(filters.timeFilter)}
         groupFilterActive={groupFilterActive}
       />
+      <HealthPanels
+        endpoint={endpointData}
+        health={healthData}
+        timeText={timeLabel(filters.timeFilter)}
+      />
     </div>
+  )
+}
+
+function HealthPanels({
+  endpoint,
+  health,
+  timeText,
+}: {
+  endpoint: EndpointLatency[]
+  health: CredentialHealth[]
+  timeText: string
+}) {
+  return (
+    <div className="mb-6 grid gap-4 lg:grid-cols-2">
+      <EndpointLatencyPanel data={endpoint} timeText={timeText} />
+      <CredentialHealthPanel data={health} timeText={timeText} />
+    </div>
+  )
+}
+
+function EndpointLatencyPanel({ data, timeText }: { data: EndpointLatency[]; timeText: string }) {
+  return (
+    <Card>
+      <CardContent className="p-4 sm:p-5">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="text-base font-semibold tracking-tight">端点延迟 / 限流</h2>
+          <span className="text-[11px] text-muted-foreground">{timeText}</span>
+        </div>
+        <EndpointLatencyChart data={data} />
+      </CardContent>
+    </Card>
+  )
+}
+
+function CredentialHealthPanel({ data, timeText }: { data: CredentialHealth[]; timeText: string }) {
+  // 成功率升序：最不健康的排前面，一眼看出问题号
+  const rows = useMemo(
+    () =>
+      [...data]
+        .map((h) => ({
+          ...h,
+          successRate: h.total > 0 ? h.success / h.total : 0,
+          throttleRate: h.total > 0 ? h.throttled / h.total : 0,
+        }))
+        .sort((a, b) => a.successRate - b.successRate),
+    [data],
+  )
+  return (
+    <Card>
+      <CardContent className="p-4 sm:p-5">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="text-base font-semibold tracking-tight">凭据健康度</h2>
+          <span className="text-[11px] text-muted-foreground">{timeText}</span>
+        </div>
+        {rows.length === 0 ? (
+          <div className="flex h-[180px] items-center justify-center text-sm text-muted-foreground sm:h-[260px]">
+            暂无数据
+          </div>
+        ) : (
+          <div className="max-h-[340px] overflow-auto text-[12px]">
+            <table className="w-full table-fixed">
+              <thead className="text-muted-foreground">
+                <tr>
+                  <th className="text-left font-medium pb-1 w-[38%]">凭据</th>
+                  <th className="text-right font-medium w-[14%]">请求</th>
+                  <th className="text-right font-medium w-[16%]">成功率</th>
+                  <th className="text-right font-medium w-[16%]">限流率</th>
+                  <th className="text-right font-medium w-[16%]">鉴权失败</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((h) => (
+                  <tr key={h.credentialId} className="border-t border-border/40">
+                    <td className="py-1 truncate" title={h.email ?? `#${h.credentialId}`}>
+                      {h.email ?? `#${h.credentialId}`}
+                    </td>
+                    <td className="text-right tabular-nums">{formatNumber(h.total)}</td>
+                    <td
+                      className={cn(
+                        'text-right tabular-nums',
+                        h.successRate >= 0.95
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : h.successRate >= 0.8
+                            ? 'text-amber-600 dark:text-amber-400'
+                            : 'text-destructive',
+                      )}
+                    >
+                      {(h.successRate * 100).toFixed(1)}%
+                    </td>
+                    <td className="text-right tabular-nums">{(h.throttleRate * 100).toFixed(1)}%</td>
+                    <td className="text-right tabular-nums">{formatNumber(h.authFailed)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 

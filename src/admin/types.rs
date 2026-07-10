@@ -546,6 +546,13 @@ pub struct SetAccountThrottleConfigRequest {
     pub cooldown_secs: Option<u64>,
 }
 
+/// 更新自适应 RPM 开关
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetAdaptiveRpmRequest {
+    pub enabled: bool,
+}
+
 /// 普通 429 重试策略响应
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

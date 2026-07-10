@@ -19,6 +19,7 @@ import {
 import {
   useLoadBalancingMode, useSetLoadBalancingMode,
   useAccountThrottleConfig, useSetAccountThrottleConfig,
+  useAdaptiveRpm, useSetAdaptiveRpm,
   useRetryPolicy, useSetRetryPolicy,
 } from '@/hooks/use-credentials'
 import { useUpdateCheck } from '@/hooks/use-update-check'
@@ -47,6 +48,8 @@ export function TopbarTools({ compact = false }: TopbarToolsProps) {
   const { mutate: setLoadBalancingMode, isPending: isSettingMode } = useSetLoadBalancingMode()
   const { data: throttleConfig, isLoading: isLoadingThrottle } = useAccountThrottleConfig()
   const { mutate: setThrottleConfig, isPending: isSettingThrottle } = useSetAccountThrottleConfig()
+  const { data: adaptiveRpm, isLoading: isLoadingAdaptiveRpm } = useAdaptiveRpm()
+  const { mutate: setAdaptiveRpmMut, isPending: isSettingAdaptiveRpm } = useSetAdaptiveRpm()
   const { data: retryPolicy, isLoading: isLoadingRetry } = useRetryPolicy()
   const { mutate: setRetryPolicy, isPending: isSettingRetry } = useSetRetryPolicy()
   const { data: updateCheck } = useUpdateCheck()
@@ -92,6 +95,15 @@ export function TopbarTools({ compact = false }: TopbarToolsProps) {
     })
   }
 
+  const handleToggleAdaptiveRpm = () => {
+    const cur = adaptiveRpm?.enabled ?? false
+    const next = !cur
+    setAdaptiveRpmMut(next, {
+      onSuccess: () => toast.success(next ? '已开启自适应 RPM' : '已关闭自适应 RPM'),
+      onError: (err) => toast.error(`切换失败: ${extractErrorMessage(err)}`),
+    })
+  }
+
   const openKeyDialog = () => {
     setNewKey('')
     setShowPlain(false)
@@ -121,13 +133,17 @@ export function TopbarTools({ compact = false }: TopbarToolsProps) {
 
   const controls = {
     affinityEnabled: loadBalancingData?.affinityEnabled ?? true,
+    adaptiveRpmEnabled: adaptiveRpm?.enabled ?? false,
     handleRefresh,
     handleToggleAffinity,
+    handleToggleAdaptiveRpm,
     handleToggleFailover,
     handleToggleLoadBalancing,
+    isLoadingAdaptiveRpm,
     isLoadingMode,
     isLoadingRetry,
     isLoadingThrottle,
+    isSettingAdaptiveRpm,
     isSettingMode,
     isSettingRetry,
     isSettingThrottle,
@@ -258,13 +274,17 @@ export function TopbarTools({ compact = false }: TopbarToolsProps) {
 
 interface ToolControls {
   affinityEnabled: boolean
+  adaptiveRpmEnabled: boolean
   handleRefresh: () => void
   handleToggleAffinity: () => void
+  handleToggleAdaptiveRpm: () => void
   handleToggleFailover: () => void
   handleToggleLoadBalancing: () => void
+  isLoadingAdaptiveRpm: boolean
   isLoadingMode: boolean
   isLoadingRetry: boolean
   isLoadingThrottle: boolean
+  isSettingAdaptiveRpm: boolean
   isSettingMode: boolean
   isSettingRetry: boolean
   isSettingThrottle: boolean
@@ -292,6 +312,7 @@ function FullTools({ controls }: { controls: ToolControls }) {
         onToggleFailover={controls.handleToggleFailover}
         onChangeCooldown={controls.updateCooldown}
       />
+      <AdaptiveRpmButton controls={controls} />
       <RefreshButton onRefresh={controls.handleRefresh} />
       <ImageUpdateButton controls={controls} />
       <KeySettingsMenu
@@ -337,6 +358,17 @@ function CompactTools({ controls }: { controls: ToolControls }) {
           <Link />
           {controls.affinityEnabled ? '关闭客户端亲和性' : '开启客户端亲和性'}
         </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={controls.isLoadingAdaptiveRpm || controls.isSettingAdaptiveRpm}
+          onSelect={controls.handleToggleAdaptiveRpm}
+        >
+          <Gauge />
+          {controls.isLoadingAdaptiveRpm
+            ? '自适应 RPM 加载中'
+            : controls.adaptiveRpmEnabled
+              ? '关闭自适应 RPM'
+              : '开启自适应 RPM'}
+        </DropdownMenuItem>
         <DropdownMenuItem onSelect={controls.handleRefresh}>
           <RefreshCw />刷新数据
         </DropdownMenuItem>
@@ -358,6 +390,27 @@ function CompactTools({ controls }: { controls: ToolControls }) {
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  )
+}
+
+function AdaptiveRpmButton({ controls }: { controls: ToolControls }) {
+  return (
+    <Button
+      variant={controls.adaptiveRpmEnabled ? 'default' : 'outline'}
+      size="sm"
+      onClick={controls.handleToggleAdaptiveRpm}
+      disabled={controls.isLoadingAdaptiveRpm || controls.isSettingAdaptiveRpm}
+      title="自适应 RPM：命中 429 时自动降速，成功时缓慢回升（AIMD）"
+    >
+      <Gauge className="h-3.5 w-3.5" />
+      <span className="hidden md:inline">
+        {controls.isLoadingAdaptiveRpm
+          ? '加载中…'
+          : controls.adaptiveRpmEnabled
+            ? '自适应 RPM · 开'
+            : '自适应 RPM · 关'}
+      </span>
+    </Button>
   )
 }
 

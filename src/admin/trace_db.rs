@@ -309,6 +309,14 @@ impl TraceStore {
             }
         }
 
+        // 端点延迟看板：按 endpoint 分组聚合，补索引避免全表扫。
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_attempts_endpoint ON trace_attempts(endpoint);",
+        )?;
+
+        // 凭据配额趋势时序表（余额刷新器每轮写一行）。SCHEMA 已含建表，此处兼容旧库。
+        conn.execute_batch(BALANCE_SNAPSHOTS_SCHEMA)?;
+
         Ok(())
     }
 
@@ -597,6 +605,8 @@ impl TraceStore {
                 [cutoff],
             )?;
             let n = tx.execute("DELETE FROM traces WHERE ts_epoch < ?1", [cutoff])?;
+            // 配额快照同保留期清理
+            tx.execute("DELETE FROM balance_snapshots WHERE ts_epoch < ?1", [cutoff])?;
             Ok(n)
         })();
         match res {
@@ -728,6 +738,185 @@ impl TraceStore {
         }
         out
     }
+
+    /// 按端点聚合延迟分位与 429 命中率（`since_epoch` 起的时间窗内）。
+    ///
+    /// SQLite 无原生百分位函数，故 SQL 只按端点拉出各跳的 duration_ms/connect_ms 与
+    /// 是否 429，Rust 侧分组排序后取 P50/P95（与 [`Self::failure_stats`] 的
+    /// 「SQL 聚合 + Rust 归并」同风格）。仅 warn 失败，返回空。
+    pub fn endpoint_latency_stats(&self, since_epoch: i64) -> Vec<EndpointLatency> {
+        let conn = self.conn.lock();
+        let mut stmt = match conn.prepare(
+            "SELECT a.endpoint, a.duration_ms, a.connect_ms, \
+             (a.http_status = 429 OR a.outcome = 'account_throttled') AS throttled \
+             FROM trace_attempts a JOIN traces t ON a.trace_id = t.trace_id \
+             WHERE t.ts_epoch >= ?1",
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("endpoint_latency_stats prepare 失败: {}", e);
+                return Vec::new();
+            }
+        };
+        let rows = stmt.query_map([since_epoch], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)? as u64,
+                row.get::<_, Option<i64>>(2)?.map(|v| v as u64),
+                row.get::<_, i64>(3)? != 0,
+            ))
+        });
+        let rows = match rows {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("endpoint_latency_stats 查询失败: {}", e);
+                return Vec::new();
+            }
+        };
+        // endpoint → (总耗时列表, connect 耗时列表, 429 计数)
+        let mut acc: std::collections::HashMap<String, (Vec<u64>, Vec<u64>, u64)> =
+            std::collections::HashMap::new();
+        for (endpoint, dur, connect, throttled) in rows.flatten() {
+            let e = acc.entry(endpoint).or_default();
+            e.0.push(dur);
+            if let Some(c) = connect {
+                e.1.push(c);
+            }
+            if throttled {
+                e.2 += 1;
+            }
+        }
+        let mut out: Vec<EndpointLatency> = acc
+            .into_iter()
+            .map(|(endpoint, (mut durs, mut conns, throttle_count))| {
+                durs.sort_unstable();
+                conns.sort_unstable();
+                let count = durs.len() as u64;
+                EndpointLatency {
+                    endpoint,
+                    count,
+                    p50_ms: percentile(&durs, 0.50),
+                    p95_ms: percentile(&durs, 0.95),
+                    p50_connect_ms: percentile(&conns, 0.50),
+                    p95_connect_ms: percentile(&conns, 0.95),
+                    throttle_count,
+                    throttle_rate: if count > 0 {
+                        throttle_count as f64 / count as f64
+                    } else {
+                        0.0
+                    },
+                }
+            })
+            .collect();
+        // 调用量降序，前端展示稳定
+        out.sort_by(|a, b| b.count.cmp(&a.count));
+        out
+    }
+
+    /// 按凭据聚合健康度（成功率 / 429 限流率 / 鉴权失败率），`since_epoch` 起的窗内。
+    /// 统计 trace_attempts 每一跳（credential_id != 0），仅 warn 失败，返回空。
+    pub fn credential_health(&self, since_epoch: i64) -> Vec<CredentialHealth> {
+        let conn = self.conn.lock();
+        let mut stmt = match conn.prepare(
+            "SELECT a.credential_id, \
+             COUNT(*) AS total, \
+             SUM(a.outcome = 'success') AS success, \
+             SUM(a.http_status = 429 OR a.outcome = 'account_throttled') AS throttled, \
+             SUM(a.outcome = 'auth_failed') AS auth_fail \
+             FROM trace_attempts a JOIN traces t ON a.trace_id = t.trace_id \
+             WHERE t.ts_epoch >= ?1 AND a.credential_id != 0 \
+             GROUP BY a.credential_id",
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("credential_health prepare 失败: {}", e);
+                return Vec::new();
+            }
+        };
+        let rows = stmt.query_map([since_epoch], |row| {
+            Ok(CredentialHealth {
+                credential_id: row.get::<_, i64>(0)? as u64,
+                total: row.get::<_, i64>(1)? as u64,
+                success: row.get::<_, i64>(2)? as u64,
+                throttled: row.get::<_, i64>(3)? as u64,
+                auth_failed: row.get::<_, i64>(4)? as u64,
+            })
+        });
+        match rows {
+            Ok(r) => r.flatten().collect(),
+            Err(e) => {
+                tracing::warn!("credential_health 查询失败: {}", e);
+                Vec::new()
+            }
+        }
+    }
+
+    /// 写入一条凭据配额快照（余额刷新器每轮调用）。仅 warn 失败。
+    pub fn insert_balance_snapshot(
+        &self,
+        credential_id: u64,
+        remaining: Option<f64>,
+        usage_limit: Option<f64>,
+        usage_pct: Option<f64>,
+    ) {
+        let conn = self.conn.lock();
+        if let Err(e) = conn.execute(
+            "INSERT INTO balance_snapshots (credential_id, ts_epoch, remaining, usage_limit, usage_pct) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                credential_id as i64,
+                Utc::now().timestamp(),
+                remaining,
+                usage_limit,
+                usage_pct,
+            ],
+        ) {
+            tracing::warn!("balance_snapshots 写入失败: {}", e);
+        }
+    }
+
+    /// 查询某凭据自 `since_epoch` 起的配额时序（按时间升序）。仅 warn 失败，返回空。
+    pub fn balance_series(&self, credential_id: u64, since_epoch: i64) -> Vec<BalancePoint> {
+        let conn = self.conn.lock();
+        let mut stmt = match conn.prepare(
+            "SELECT ts_epoch, remaining, usage_limit, usage_pct FROM balance_snapshots \
+             WHERE credential_id = ?1 AND ts_epoch >= ?2 ORDER BY ts_epoch ASC",
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("balance_series prepare 失败: {}", e);
+                return Vec::new();
+            }
+        };
+        let rows = stmt.query_map(rusqlite::params![credential_id as i64, since_epoch], |row| {
+            Ok(BalancePoint {
+                ts_epoch: row.get::<_, i64>(0)?,
+                remaining: row.get::<_, Option<f64>>(1)?,
+                usage_limit: row.get::<_, Option<f64>>(2)?,
+                usage_pct: row.get::<_, Option<f64>>(3)?,
+            })
+        });
+        match rows {
+            Ok(r) => r.flatten().collect(),
+            Err(e) => {
+                tracing::warn!("balance_series 查询失败: {}", e);
+                Vec::new()
+            }
+        }
+    }
+}
+
+/// 从**已升序排序**的切片取第 `q` 分位（`q ∈ [0,1]`）。空切片返回 0。
+/// 采用「最近秩」法（nearest-rank）：与运维看板口径一致，无需插值。
+fn percentile(sorted: &[u64], q: f64) -> u64 {
+    if sorted.is_empty() {
+        return 0;
+    }
+    if sorted.len() == 1 {
+        return sorted[0];
+    }
+    let rank = (q * (sorted.len() as f64 - 1.0)).round() as usize;
+    sorted[rank.min(sorted.len() - 1)]
 }
 
 /// 按凭据的失败分类计数（鉴权 / 账号风控 / 其他）
@@ -737,6 +926,45 @@ pub struct FailureStats {
     pub auth: u64,
     pub throttle: u64,
     pub other: u64,
+}
+
+/// 端点级延迟分位 + 429 命中率（[`TraceStore::endpoint_latency_stats`] 的返回项）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EndpointLatency {
+    pub endpoint: String,
+    /// 窗内该端点的总跳数
+    pub count: u64,
+    /// 总耗时 P50/P95（毫秒）
+    pub p50_ms: u64,
+    pub p95_ms: u64,
+    /// 连接耗时 P50/P95（毫秒；仅有 connect_ms 的跳参与）
+    pub p50_connect_ms: u64,
+    pub p95_connect_ms: u64,
+    /// 429/账号风控 命中数与占比
+    pub throttle_count: u64,
+    pub throttle_rate: f64,
+}
+
+/// 凭据健康度聚合（[`TraceStore::credential_health`] 的返回项）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialHealth {
+    pub credential_id: u64,
+    pub total: u64,
+    pub success: u64,
+    pub throttled: u64,
+    pub auth_failed: u64,
+}
+
+/// 凭据配额时序点（[`TraceStore::balance_series`] 的返回项）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BalancePoint {
+    pub ts_epoch: i64,
+    pub remaining: Option<f64>,
+    pub usage_limit: Option<f64>,
+    pub usage_pct: Option<f64>,
 }
 
 /// 共享存储句柄
@@ -785,6 +1013,28 @@ CREATE TABLE IF NOT EXISTS trace_attempts (
     PRIMARY KEY (trace_id, attempt)
 );
 CREATE INDEX IF NOT EXISTS idx_attempts_trace ON trace_attempts(trace_id);
+CREATE INDEX IF NOT EXISTS idx_attempts_endpoint ON trace_attempts(endpoint);
+
+CREATE TABLE IF NOT EXISTS balance_snapshots (
+    credential_id INTEGER NOT NULL,
+    ts_epoch      INTEGER NOT NULL,
+    remaining     REAL,
+    usage_limit   REAL,
+    usage_pct     REAL
+);
+CREATE INDEX IF NOT EXISTS idx_balance_cred_ts ON balance_snapshots(credential_id, ts_epoch);
+";
+
+/// 凭据配额时序表 schema（新库由 SCHEMA 后追加、旧库由 migrate 兼容建表）。
+const BALANCE_SNAPSHOTS_SCHEMA: &str = "\
+CREATE TABLE IF NOT EXISTS balance_snapshots (
+    credential_id INTEGER NOT NULL,
+    ts_epoch      INTEGER NOT NULL,
+    remaining     REAL,
+    usage_limit   REAL,
+    usage_pct     REAL
+);
+CREATE INDEX IF NOT EXISTS idx_balance_cred_ts ON balance_snapshots(credential_id, ts_epoch);
 ";
 
 #[cfg(test)]
@@ -1069,6 +1319,57 @@ mod tests {
         );
         // 空库再清一次返回 0，不报错
         assert_eq!(store.clear_all(), 0);
+    }
+
+    #[test]
+    fn percentile_edges() {
+        assert_eq!(percentile(&[], 0.5), 0);
+        assert_eq!(percentile(&[42], 0.95), 42);
+        // 100 个 1..=100，P50 最近秩 = 索引 round(0.5*99)=50 → 值 51；P95 = round(0.95*99)=94 → 95
+        let v: Vec<u64> = (1..=100).collect();
+        assert_eq!(percentile(&v, 0.50), 51);
+        assert_eq!(percentile(&v, 0.95), 95);
+    }
+
+    #[test]
+    fn endpoint_latency_and_health() {
+        let store = mem_store();
+        // sample() 造两跳：#0 ide 429 account_throttled(400ms)，#1 ide success(800ms)
+        store.insert(&sample(TraceSample {
+            trace_id: "t1",
+            status: "success",
+            credential_id: 5,
+            model: "m1",
+        }));
+        let lat = store.endpoint_latency_stats(0);
+        assert_eq!(lat.len(), 1, "只有一个端点 ide");
+        let ide = &lat[0];
+        assert_eq!(ide.endpoint, "ide");
+        assert_eq!(ide.count, 2);
+        assert_eq!(ide.throttle_count, 1, "一跳 account_throttled");
+        assert!((ide.throttle_rate - 0.5).abs() < 1e-9);
+
+        // 健康度：credential 5（第二跳成功），credential 9（第一跳 throttled）
+        let health = store.credential_health(0);
+        let c9 = health.iter().find(|h| h.credential_id == 9).unwrap();
+        assert_eq!(c9.throttled, 1);
+        let c5 = health.iter().find(|h| h.credential_id == 5).unwrap();
+        assert_eq!(c5.success, 1);
+    }
+
+    #[test]
+    fn balance_snapshot_roundtrip() {
+        let store = mem_store();
+        store.insert_balance_snapshot(7, Some(1000.0), Some(5000.0), Some(80.0));
+        store.insert_balance_snapshot(7, Some(950.0), Some(5000.0), Some(81.0));
+        store.insert_balance_snapshot(8, Some(200.0), Some(1000.0), Some(80.0));
+        let series = store.balance_series(7, 0);
+        assert_eq!(series.len(), 2, "凭据 7 有两条快照");
+        assert_eq!(series[0].remaining, Some(1000.0));
+        assert_eq!(series[1].remaining, Some(950.0));
+        assert!(series[0].ts_epoch <= series[1].ts_epoch, "按时间升序");
+        assert_eq!(store.balance_series(8, 0).len(), 1);
+        assert_eq!(store.balance_series(999, 0).len(), 0, "无快照凭据返回空");
     }
 
     #[test]

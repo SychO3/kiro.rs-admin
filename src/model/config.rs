@@ -365,6 +365,14 @@ pub struct Config {
     #[serde(default = "default_account_throttle_cooldown_secs")]
     pub account_throttle_cooldown_secs: u64,
 
+    /// 自适应 RPM（默认关闭）。
+    ///
+    /// 关闭时：RPM 上限固定为每凭据 `rpm_limit`，行为与历史完全一致。
+    /// 开启时：每凭据维护一个「有效 RPM」，命中 429/风控乘性下调、持续成功加性恢复
+    /// （AIMD），把限流损耗压到最低。有效值封顶原始 `rpm_limit`、下限 1。
+    #[serde(default = "default_adaptive_rpm")]
+    pub adaptive_rpm: bool,
+
     /// 普通 429 重试策略模式。默认 `failover` 保持当前项目行为。
     #[serde(default = "default_retry_mode")]
     pub retry_mode: RetryMode,
@@ -499,6 +507,10 @@ fn default_account_throttle_failover() -> bool {
     true
 }
 
+fn default_adaptive_rpm() -> bool {
+    false
+}
+
 fn default_account_throttle_cooldown_secs() -> u64 {
     30 * 60
 }
@@ -568,6 +580,7 @@ impl Default for Config {
             webshare_auto_replace: default_true(),
             account_throttle_failover: default_account_throttle_failover(),
             account_throttle_cooldown_secs: default_account_throttle_cooldown_secs(),
+            adaptive_rpm: default_adaptive_rpm(),
             retry_mode: default_retry_mode(),
             retry_policy: None,
             extract_thinking: default_extract_thinking(),

@@ -891,6 +891,10 @@ struct CredentialEntry {
     /// 最近 60 秒内「对该账号上游发起请求」的时间戳队列（RPM 滑动窗口计数）。
     /// record_request 时 push 队尾并剔除过期项；不持久化，进程重启清空。
     recent_requests: VecDeque<Instant>,
+    /// 自适应 RPM 的「有效上限」（AIMD 动态调节值）。仅 adaptive_rpm 开启时生效。
+    /// 命中 429/风控乘性下调、持续成功加性恢复；封顶原始 rpm_limit、下限 1。
+    /// 不持久化，进程重启后由 rpm_limit 重新初始化。
+    effective_rpm: f64,
 }
 
 /// 禁用原因
@@ -935,6 +939,9 @@ pub struct CredentialEntrySnapshot {
     pub rpm_limit: u32,
     /// 当前滑动窗口内已用请求条数（前端展示 "rpm_current / rpm_limit"）
     pub rpm_current: u32,
+    /// 自适应 RPM 的当前有效上限（仅 adaptive_rpm 开启时有意义；下取整）。
+    /// 关闭时等于 rpm_limit。前端可展示 "effective / limit" 观测退避效果。
+    pub effective_rpm: u32,
     /// 是否被禁用
     pub disabled: bool,
     /// 连续失败次数
@@ -1034,6 +1041,8 @@ pub struct MultiTokenManager {
     account_throttle_failover: AtomicBool,
     /// 账号级风控冷却时长（秒，运行时可修改）
     account_throttle_cooldown_secs: AtomicU64,
+    /// 自适应 RPM 开关（运行时可修改；默认关闭 = 固定 rpm_limit）
+    adaptive_rpm: AtomicBool,
     /// 普通 429 重试策略模式（运行时可修改）
     retry_mode: Mutex<RetryMode>,
     /// 普通 429 自定义策略（运行时可修改）
@@ -1138,12 +1147,20 @@ fn rpm_window_count(entry: &CredentialEntry, now: Instant) -> u32 {
 }
 
 /// 该账号是否已达 RPM 上限。`rpm_limit == 0` 视为不限速，永远返回 false；
-/// 窗口内条数 >= rpm_limit 即达限（恰好等于上限也算超）。
-fn is_rpm_exceeded(entry: &CredentialEntry, now: Instant) -> bool {
-    let limit = entry.credentials.rpm_limit;
-    if limit == 0 {
+/// 窗口内条数 >= 有效上限即达限（恰好等于上限也算超）。
+///
+/// `adaptive` 开启时用 AIMD 动态调节的 `effective_rpm`（下取整，至少 1）作有效上限；
+/// 关闭时用固定 `rpm_limit`，行为与历史一致。
+fn is_rpm_exceeded(entry: &CredentialEntry, now: Instant, adaptive: bool) -> bool {
+    let base = entry.credentials.rpm_limit;
+    if base == 0 {
         return false; // 不限速
     }
+    let limit = if adaptive {
+        (entry.effective_rpm.floor() as u32).max(1)
+    } else {
+        base
+    };
     rpm_window_count(entry, now) >= limit
 }
 
@@ -1214,6 +1231,7 @@ impl MultiTokenManager {
                     rate_limited_until: None,
                     in_flight: 0,
                     recent_requests: VecDeque::new(),
+                    effective_rpm: cred.rpm_limit as f64,
                 }
             })
             .collect();
@@ -1262,6 +1280,7 @@ impl MultiTokenManager {
         let proxy_balancing_mode = config.proxy_balancing_mode.clone();
         let throttle_failover = config.account_throttle_failover;
         let throttle_cooldown_secs = config.account_throttle_cooldown_secs;
+        let adaptive_rpm = config.adaptive_rpm;
         let retry_mode = config.retry_mode;
         let retry_policy = config.retry_policy.clone();
         let manager = Self {
@@ -1278,6 +1297,7 @@ impl MultiTokenManager {
             proxy_balancing_mode: Mutex::new(proxy_balancing_mode),
             account_throttle_failover: AtomicBool::new(throttle_failover),
             account_throttle_cooldown_secs: AtomicU64::new(throttle_cooldown_secs),
+            adaptive_rpm: AtomicBool::new(adaptive_rpm),
             retry_mode: Mutex::new(retry_mode),
             retry_policy: Mutex::new(retry_policy),
             client_affinity: super::affinity::CredentialAffinity::default(),
@@ -1414,6 +1434,7 @@ impl MultiTokenManager {
     ) -> Option<(u64, KiroCredentials)> {
         let entries = self.entries.lock();
         let now = Instant::now();
+        let adaptive = self.adaptive_rpm.load(Ordering::Relaxed);
 
         // 过滤可用凭据
         let available: Vec<_> = entries
@@ -1438,7 +1459,7 @@ impl MultiTokenManager {
                     return false;
                 }
                 // RPM 滑动窗口：本账号最近 60s 请求数已达上限，跳过（与 throttled 同范式）
-                if is_rpm_exceeded(e, now) {
+                if is_rpm_exceeded(e, now, adaptive) {
                     return false;
                 }
                 true
@@ -1487,13 +1508,14 @@ impl MultiTokenManager {
         excluded_ids: &HashSet<u64>,
     ) -> bool {
         let now = Instant::now();
+        let adaptive = self.adaptive_rpm.load(Ordering::Relaxed);
         self.entries.lock().iter().any(|e| {
             !excluded_ids.contains(&e.id)
                 && !e.disabled
                 && !e.throttled_until.map(|t| t > now).unwrap_or(false)
                 && !e.rate_limited_until.map(|t| t > now).unwrap_or(false)
                 && credential_matches_request(&e.credentials, model, group)
-                && !is_rpm_exceeded(e, now)
+                && !is_rpm_exceeded(e, now, adaptive)
         })
     }
 
@@ -1603,6 +1625,7 @@ impl MultiTokenManager {
                     let entries = self.entries.lock();
                     let current_id = *self.current_id.lock();
                     let now = Instant::now();
+                    let adaptive = self.adaptive_rpm.load(Ordering::Relaxed);
                     entries
                         .iter()
                         .find(|e| {
@@ -1611,7 +1634,7 @@ impl MultiTokenManager {
                                 && !e.disabled
                                 && !e.throttled_until.map(|t| t > now).unwrap_or(false)
                                 && !e.rate_limited_until.map(|t| t > now).unwrap_or(false)
-                                && !is_rpm_exceeded(e, now)
+                                && !is_rpm_exceeded(e, now, adaptive)
                                 && credential_matches_request(&e.credentials, model, group)
                         })
                         .map(|e| (e.id, e.credentials.clone()))
@@ -1744,7 +1767,7 @@ impl MultiTokenManager {
             return false;
         }
         // RPM 滑动窗口超限
-        if is_rpm_exceeded(e, now) {
+        if is_rpm_exceeded(e, now, self.adaptive_rpm.load(Ordering::Relaxed)) {
             return false;
         }
         true
@@ -2210,6 +2233,11 @@ impl MultiTokenManager {
                 // 成功 = 风控已解除，提前结束冷却
                 entry.throttled_until = None;
                 entry.rate_limited_until = None;
+                // 自适应 RPM：加性恢复（+1），封顶原始 rpm_limit
+                if entry.credentials.rpm_limit > 0 {
+                    entry.effective_rpm =
+                        (entry.effective_rpm + 1.0).min(entry.credentials.rpm_limit as f64);
+                }
                 tracing::debug!(
                     "凭据 #{} API 调用成功（累计 {} 次）",
                     id,
@@ -2516,6 +2544,11 @@ impl MultiTokenManager {
                     priority: e.credentials.priority,
                     rpm_limit: e.credentials.rpm_limit,
                     rpm_current: rpm_window_count(e, now),
+                    effective_rpm: if e.credentials.rpm_limit > 0 {
+                        (e.effective_rpm.floor() as u32).max(1)
+                    } else {
+                        0
+                    },
                     disabled: e.disabled,
                     failure_count: e.failure_count,
                     total_failure_count: e.total_failure_count,
@@ -2635,6 +2668,10 @@ impl MultiTokenManager {
                 });
                 // 计入累计失败（账号风控不动连续 failure_count，避免冷却结束后误禁用）
                 entry.total_failure_count += 1;
+                // 自适应 RPM：账号级风控同样乘性下调（×0.5），下限 1
+                if entry.credentials.rpm_limit > 0 {
+                    entry.effective_rpm = (entry.effective_rpm * 0.5).max(1.0);
+                }
                 tracing::warn!(
                     "凭据 #{} 触发账号级风控，冷却 {} 秒",
                     id,
@@ -2678,6 +2715,10 @@ impl MultiTokenManager {
                 });
             }
             entry.total_failure_count += 1;
+            // 自适应 RPM：命中 429 乘性下调（×0.5），下限 1
+            if entry.credentials.rpm_limit > 0 {
+                entry.effective_rpm = (entry.effective_rpm * 0.5).max(1.0);
+            }
             tracing::warn!(
                 "凭据 #{} 命中普通 429，策略冷却 {}ms",
                 id,
@@ -3398,6 +3439,7 @@ impl MultiTokenManager {
                 .min()
                 .unwrap_or(0);
 
+            let new_effective_rpm = validated_cred.rpm_limit as f64;
             entries.push(CredentialEntry {
                 id: new_id,
                 credentials: validated_cred,
@@ -3412,6 +3454,7 @@ impl MultiTokenManager {
                 rate_limited_until: None,
                 in_flight: 0,
                 recent_requests: VecDeque::new(),
+                effective_rpm: new_effective_rpm,
             });
         }
 
@@ -4050,6 +4093,52 @@ impl MultiTokenManager {
 
         Ok(())
     }
+
+    /// 获取自适应 RPM 开关（Admin API）
+    pub fn get_adaptive_rpm(&self) -> bool {
+        self.adaptive_rpm.load(Ordering::Relaxed)
+    }
+
+    /// 设置自适应 RPM 开关（Admin API）。持久化失败时回滚内存值。
+    pub fn set_adaptive_rpm(&self, enabled: bool) -> anyhow::Result<()> {
+        let prev = self.get_adaptive_rpm();
+        if enabled == prev {
+            return Ok(());
+        }
+        self.adaptive_rpm.store(enabled, Ordering::Relaxed);
+        // 关闭时把有效值复位到 rpm_limit，避免下次开启时残留旧的低值。
+        if !enabled {
+            let mut entries = self.entries.lock();
+            for e in entries.iter_mut() {
+                e.effective_rpm = e.credentials.rpm_limit as f64;
+            }
+        }
+        if let Err(err) = self.persist_adaptive_rpm(enabled) {
+            self.adaptive_rpm.store(prev, Ordering::Relaxed);
+            return Err(err);
+        }
+        tracing::info!("自适应 RPM 开关已更新: {}", enabled);
+        Ok(())
+    }
+
+    fn persist_adaptive_rpm(&self, enabled: bool) -> anyhow::Result<()> {
+        use anyhow::Context;
+
+        let config_path = match self.config.config_path() {
+            Some(path) => path.to_path_buf(),
+            None => {
+                tracing::warn!("配置文件路径未知，自适应 RPM 配置仅在当前进程生效");
+                return Ok(());
+            }
+        };
+        let mut config = Config::load(&config_path)
+            .with_context(|| format!("重新加载配置失败: {}", config_path.display()))?;
+        config.adaptive_rpm = enabled;
+        config
+            .save()
+            .with_context(|| format!("持久化自适应 RPM 配置失败: {}", config_path.display()))?;
+        Ok(())
+    }
 }
 
 impl Drop for MultiTokenManager {
@@ -4627,7 +4716,7 @@ mod tests {
         {
             let entries = manager.entries.lock();
             let e = entries.iter().find(|e| e.id == 1).unwrap();
-            assert!(!is_rpm_exceeded(e, now), "9 条未达上限");
+            assert!(!is_rpm_exceeded(e, now, false), "9 条未达上限");
         }
         {
             let mut entries = manager.entries.lock();
@@ -4641,7 +4730,7 @@ mod tests {
         {
             let entries = manager.entries.lock();
             let e = entries.iter().find(|e| e.id == 1).unwrap();
-            assert!(is_rpm_exceeded(e, now), "10 条达上限");
+            assert!(is_rpm_exceeded(e, now, false), "10 条达上限");
         }
 
         // limit=0：不限速，塞 1000 条仍不超
@@ -4656,8 +4745,69 @@ mod tests {
         {
             let entries = manager.entries.lock();
             let e = entries.iter().find(|e| e.id == 1).unwrap();
-            assert!(!is_rpm_exceeded(e, now), "rpm_limit=0 不限速");
+            assert!(!is_rpm_exceeded(e, now, false), "rpm_limit=0 不限速");
         }
+    }
+
+    #[test]
+    fn test_adaptive_rpm_aimd_bounds() {
+        // 有效上限的 AIMD 升降边界：乘性降不低于 1，加性升不超 rpm_limit。
+        let manager = MultiTokenManager::new(
+            Config::default(),
+            vec![grouped_cred("a", &[])],
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        {
+            let mut entries = manager.entries.lock();
+            let e = entries.iter_mut().find(|e| e.id == 1).unwrap();
+            e.credentials.rpm_limit = 10;
+            e.effective_rpm = 10.0;
+        }
+        // 连续 429 乘性下调：10→5→2.5→1.25→1（下限 1，不为 0）
+        for _ in 0..10 {
+            manager.report_rate_limited(1, StdDuration::ZERO);
+        }
+        {
+            let entries = manager.entries.lock();
+            let e = entries.iter().find(|e| e.id == 1).unwrap();
+            assert!(e.effective_rpm >= 1.0, "乘性下调下限为 1，不得为 0");
+            assert!(e.effective_rpm < 2.0, "多次 429 后应逼近下限");
+        }
+        // 持续成功加性恢复，封顶 rpm_limit=10
+        for _ in 0..50 {
+            manager.report_success(1);
+        }
+        {
+            let entries = manager.entries.lock();
+            let e = entries.iter().find(|e| e.id == 1).unwrap();
+            assert_eq!(e.effective_rpm, 10.0, "加性恢复封顶原始 rpm_limit");
+        }
+    }
+
+    #[test]
+    fn test_adaptive_rpm_toggle_resets_effective() {
+        // 关闭自适应时应把 effective_rpm 复位到 rpm_limit。
+        let mut cfg = Config::default();
+        cfg.adaptive_rpm = true;
+        let manager =
+            MultiTokenManager::new(cfg, vec![grouped_cred("a", &[])], None, None, false).unwrap();
+        {
+            let mut entries = manager.entries.lock();
+            let e = entries.iter_mut().find(|e| e.id == 1).unwrap();
+            e.credentials.rpm_limit = 20;
+            e.effective_rpm = 3.0; // 模拟被退避压低
+        }
+        // 关闭开关（config_path 为空，persist 走 warn 分支不报错）
+        manager.set_adaptive_rpm(false).unwrap();
+        {
+            let entries = manager.entries.lock();
+            let e = entries.iter().find(|e| e.id == 1).unwrap();
+            assert_eq!(e.effective_rpm, 20.0, "关闭后有效值复位到 rpm_limit");
+        }
+        assert!(!manager.get_adaptive_rpm());
     }
 
     #[test]

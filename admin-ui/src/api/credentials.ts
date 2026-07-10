@@ -546,6 +546,18 @@ export async function setAccountThrottleConfig(
   return data
 }
 
+// 获取自适应 RPM 开关
+export async function getAdaptiveRpm(): Promise<{ enabled: boolean }> {
+  const { data } = await api.get<{ enabled: boolean }>('/config/adaptive-rpm')
+  return data
+}
+
+// 更新自适应 RPM 开关
+export async function setAdaptiveRpm(enabled: boolean): Promise<{ enabled: boolean }> {
+  const { data } = await api.put<{ enabled: boolean }>('/config/adaptive-rpm', { enabled })
+  return data
+}
+
 export interface LogGovernanceConfig {
   traceEnabled: boolean
   traceRetentionDays: number

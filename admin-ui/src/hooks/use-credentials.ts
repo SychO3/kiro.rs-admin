@@ -16,6 +16,8 @@ import {
   setLoadBalancingMode,
   getAccountThrottleConfig,
   setAccountThrottleConfig,
+  getAdaptiveRpm,
+  setAdaptiveRpm,
   getRetryPolicy,
   setRetryPolicy,
   getLogGovernanceConfig,
@@ -213,6 +215,26 @@ export function useSetAccountThrottleConfig() {
     mutationFn: setAccountThrottleConfig,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['accountThrottleConfig'] })
+    },
+  })
+}
+
+// 获取自适应 RPM 开关
+export function useAdaptiveRpm() {
+  return useQuery({
+    queryKey: ['adaptiveRpm'],
+    queryFn: getAdaptiveRpm,
+  })
+}
+
+// 更新自适应 RPM 开关
+export function useSetAdaptiveRpm() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: setAdaptiveRpm,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['adaptiveRpm'] })
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
     },
   })
 }

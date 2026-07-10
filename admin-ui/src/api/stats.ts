@@ -1,7 +1,10 @@
 import axios from 'axios'
 import { storage } from '@/lib/storage'
 import type {
+  BalancePoint,
   CredentialDistribution,
+  CredentialHealth,
+  EndpointLatency,
   ModelDistribution,
   OverviewStats,
   StatsFilter,
@@ -51,6 +54,35 @@ export async function getByModel(time: StatsTimeFilter, filter?: StatsFilter): P
 export async function getByCredential(time: StatsTimeFilter, filter?: StatsFilter): Promise<CredentialDistribution[]> {
   const { data } = await api.get<CredentialDistribution[]>('/stats/by-credential', {
     params: statsParams(time, filter),
+  })
+  return data
+}
+
+/** 仅取时间范围（range 或 startDate/endDate），端点/健康看板不按 key/group 过滤 */
+function rangeParams(time: StatsTimeFilter) {
+  return { ...time }
+}
+
+export async function getEndpointLatency(time: StatsTimeFilter): Promise<EndpointLatency[]> {
+  const { data } = await api.get<EndpointLatency[]>('/stats/endpoint-latency', {
+    params: rangeParams(time),
+  })
+  return data
+}
+
+export async function getCredentialHealth(time: StatsTimeFilter): Promise<CredentialHealth[]> {
+  const { data } = await api.get<CredentialHealth[]>('/stats/credential-health', {
+    params: rangeParams(time),
+  })
+  return data
+}
+
+export async function getBalanceSeries(
+  credentialId: number,
+  time: StatsTimeFilter,
+): Promise<BalancePoint[]> {
+  const { data } = await api.get<BalancePoint[]>('/stats/balance-series', {
+    params: { ...rangeParams(time), credentialId },
   })
   return data
 }

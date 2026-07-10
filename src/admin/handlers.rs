@@ -23,7 +23,8 @@ use super::{
         BatchAddProxyRequest, BatchImportEvent, BatchImportRequest, BatchImportSummary,
         ClientKeyItem, ClientKeysResponse, CompleteSocialLoginRequest, CreateClientKeyRequest,
         CreateClientKeyResponse, CredentialResponseTestRequest, GlobalProxyResponse,
-        ProxyCheckUrlRequest, SetAccountThrottleConfigRequest, SetDisabledRequest,
+        ProxyCheckUrlRequest, SetAccountThrottleConfigRequest, SetAdaptiveRpmRequest,
+        SetDisabledRequest,
         SetGlobalProxyRequest, SetLoadBalancingModeRequest, SetLogGovernanceConfigRequest,
         SetPriorityRequest, SetProxyBalancingModeRequest, SetRetryPolicyRequest,
         SetUpdateConfigRequest, StartIdcLoginRequest, StartSocialLoginRequest, SuccessResponse,
@@ -701,6 +702,24 @@ pub async fn set_account_throttle_config(
 ) -> impl IntoResponse {
     match state.service.set_account_throttle_config(payload) {
         Ok(response) => Json(response).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// GET /api/admin/config/adaptive-rpm
+/// 获取自适应 RPM 开关
+pub async fn get_adaptive_rpm(State(state): State<AdminState>) -> impl IntoResponse {
+    Json(serde_json::json!({ "enabled": state.service.get_adaptive_rpm() }))
+}
+
+/// PUT /api/admin/config/adaptive-rpm
+/// 设置自适应 RPM 开关
+pub async fn set_adaptive_rpm(
+    State(state): State<AdminState>,
+    Json(payload): Json<SetAdaptiveRpmRequest>,
+) -> impl IntoResponse {
+    match state.service.set_adaptive_rpm(payload.enabled) {
+        Ok(enabled) => Json(serde_json::json!({ "enabled": enabled })).into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
 }
@@ -1569,6 +1588,78 @@ pub async fn trace_failure_stats(State(state): State<AdminState>) -> impl IntoRe
         })
         .collect();
     Json(map)
+}
+
+/// GET /api/admin/stats/endpoint-latency?range=24h|7d|30d
+///
+/// 各上游端点（ide/runtime/codewhisperer/amazonq…）的延迟分位与 429 命中率。
+pub async fn stats_endpoint_latency(
+    State(state): State<AdminState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Response {
+    let window = match parse_stats_window(&params) {
+        Ok(w) => w,
+        Err(message) => return stats_bad_request(message),
+    };
+    let data = state.trace_store.endpoint_latency_stats(window.start_ts);
+    Json(data).into_response()
+}
+
+/// GET /api/admin/stats/credential-health?range=24h|7d|30d
+///
+/// 各凭据的成功率 / 429 限流率 / 鉴权失败率（附 email 便于展示）。
+pub async fn stats_credential_health(
+    State(state): State<AdminState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Response {
+    let window = match parse_stats_window(&params) {
+        Ok(w) => w,
+        Err(message) => return stats_bad_request(message),
+    };
+    let email_map: std::collections::HashMap<u64, Option<String>> = state
+        .service
+        .get_all_credentials()
+        .credentials
+        .iter()
+        .map(|c| (c.id, c.email.clone()))
+        .collect();
+    let data = state.trace_store.credential_health(window.start_ts);
+    let enriched: Vec<serde_json::Value> = data
+        .into_iter()
+        .map(|h| {
+            let email = email_map.get(&h.credential_id).cloned().flatten();
+            serde_json::json!({
+                "credentialId": h.credential_id,
+                "email": email,
+                "total": h.total,
+                "success": h.success,
+                "throttled": h.throttled,
+                "authFailed": h.auth_failed,
+            })
+        })
+        .collect();
+    Json(enriched).into_response()
+}
+
+/// GET /api/admin/stats/balance-series?credentialId=N&range=24h|7d|30d
+///
+/// 单个凭据的剩余配额时序（数据来自余额刷新器写入的 balance_snapshots）。
+pub async fn stats_balance_series(
+    State(state): State<AdminState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Response {
+    let window = match parse_stats_window(&params) {
+        Ok(w) => w,
+        Err(message) => return stats_bad_request(message),
+    };
+    let credential_id = match params.get("credentialId").and_then(|s| s.parse::<u64>().ok()) {
+        Some(id) => id,
+        None => return stats_bad_request("credentialId 必填且须为数字".to_string()),
+    };
+    let data = state
+        .trace_store
+        .balance_series(credential_id, window.start_ts);
+    Json(data).into_response()
 }
 
 // ============ 账号分组（独立实体）============

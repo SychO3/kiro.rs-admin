@@ -503,6 +503,36 @@ export interface CredentialDistribution {
   cost: number
 }
 
+/** 端点级延迟分位 + 429 命中率 */
+export interface EndpointLatency {
+  endpoint: string
+  count: number
+  p50Ms: number
+  p95Ms: number
+  p50ConnectMs: number
+  p95ConnectMs: number
+  throttleCount: number
+  throttleRate: number
+}
+
+/** 凭据健康度聚合 */
+export interface CredentialHealth {
+  credentialId: number
+  email?: string | null
+  total: number
+  success: number
+  throttled: number
+  authFailed: number
+}
+
+/** 凭据配额时序点 */
+export interface BalancePoint {
+  tsEpoch: number
+  remaining?: number | null
+  usageLimit?: number | null
+  usagePct?: number | null
+}
+
 // ============ 请求链路追踪 ============
 
 /** 单次上游尝试 */

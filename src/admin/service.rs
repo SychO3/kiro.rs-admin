@@ -915,6 +915,15 @@ impl AdminService {
             }
             match self.fetch_balance(entry.id).await {
                 Ok(balance) => {
+                    // 写一条配额时序快照（凭据健康看板的"剩余配额趋势"数据源）
+                    if let Some(store) = &self.trace_store {
+                        store.insert_balance_snapshot(
+                            entry.id,
+                            Some(balance.remaining),
+                            Some(balance.usage_limit),
+                            Some(balance.usage_percentage),
+                        );
+                    }
                     {
                         let mut cache = self.balance_cache.lock();
                         cache.insert(
@@ -2030,6 +2039,19 @@ impl AdminService {
             .map_err(|e| AdminServiceError::InvalidCredential(e.to_string()))?;
 
         Ok(self.get_account_throttle_config())
+    }
+
+    /// 获取自适应 RPM 开关
+    pub fn get_adaptive_rpm(&self) -> bool {
+        self.token_manager.get_adaptive_rpm()
+    }
+
+    /// 设置自适应 RPM 开关
+    pub fn set_adaptive_rpm(&self, enabled: bool) -> Result<bool, AdminServiceError> {
+        self.token_manager
+            .set_adaptive_rpm(enabled)
+            .map_err(|e| AdminServiceError::InvalidCredential(e.to_string()))?;
+        Ok(self.token_manager.get_adaptive_rpm())
     }
 
     /// 获取普通 429 重试策略
