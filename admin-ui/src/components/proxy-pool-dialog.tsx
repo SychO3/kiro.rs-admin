@@ -39,6 +39,7 @@ import {
   checkProxy,
   assignProxiesRoundRobin,
   webshareReplace,
+  webshareSync,
   type ProxyBalancingMode,
 } from '@/api/credentials'
 import { extractErrorMessage, maskProxyUrl } from '@/lib/utils'
@@ -195,6 +196,15 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
       toast.error(`换 IP 失败: ${extractErrorMessage(err)}`)
       setReplacingId(null)
     },
+  })
+
+  const webshareSyncMutation = useMutation({
+    mutationFn: () => webshareSync(),
+    onSuccess: (res) => {
+      toast.success(`同步完成：新增 ${res.added}，删除 ${res.removed}，不变 ${res.unchanged}`)
+      queryClient.invalidateQueries({ queryKey: ['proxy-pool'] })
+    },
+    onError: (err) => toast.error(`同步失败: ${extractErrorMessage(err)}`),
   })
 
   const handleAdd = (e: React.FormEvent) => {
@@ -616,6 +626,17 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
                       <Shuffle className="h-3 w-3 mr-1" />
                       轮询分配
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={() => webshareSyncMutation.mutate()}
+                      disabled={webshareSyncMutation.isPending}
+                      title="从 Webshare 拉取最新代理列表，清理已失效 IP"
+                    >
+                      <RefreshCw className={`h-3 w-3 mr-1 ${webshareSyncMutation.isPending ? 'animate-spin' : ''}`} />
+                      同步 Webshare
+                    </Button>
                   </div>
                 )}
               </div>
@@ -732,7 +753,7 @@ export function ProxyPoolDialog({ open, onOpenChange, onSelectProxy }: ProxyPool
                       >
                         <Activity className="h-3 w-3" />
                       </Button>
-                      {proxy.label?.startsWith('WS-') && (
+                      {proxy.url.includes('@') && (
                         <Button
                           size="sm"
                           variant="outline"

@@ -45,7 +45,10 @@ impl WebshareProxy {
 
 #[derive(Debug, Deserialize)]
 struct ReplaceResponse {
-    id: String,
+    // Webshare v3 Replace API 返回的 id 是数字（如 1493091），不是字符串。
+    // 之前误定义为 String 导致 resp.json() 解析失败（error decoding response body），
+    // 换 IP 请求虽在 Webshare 侧成功，本地却报错、不轮询、不重新同步。
+    id: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -167,14 +170,18 @@ pub async fn sync_to_pool(
         }
     }
 
-    // 删除已不存在的 Webshare 代理（只删 WS- 开头的）
+    // 删除已失效的 Webshare 代理：按「用户名匹配本 Webshare 账号」识别（不再依赖 WS- label），
+    // 只要该代理属于本 Webshare 账号、但已不在最新列表里，就删掉——这样手动复制进来的、
+    // label 为空的 Webshare 代理，失效后也能被正确清理。非 Webshare 代理（用户名不匹配）不动。
+    let webshare_usernames: std::collections::HashSet<String> = proxies
+        .iter()
+        .map(|p| p.username.clone())
+        .collect();
     for entry in &existing {
-        let is_webshare = entry
-            .label
-            .as_deref()
-            .map(|l| l.starts_with("WS-"))
+        let belongs_to_webshare = extract_proxy_username(&entry.url)
+            .map(|u| webshare_usernames.contains(&u))
             .unwrap_or(false);
-        if is_webshare && !new_url_set.contains(entry.url.as_str()) {
+        if belongs_to_webshare && !new_url_set.contains(entry.url.as_str()) {
             let _ = pool.delete(entry.id);
             result.removed += 1;
         }
@@ -207,6 +214,21 @@ fn extract_ip_from_url(url: &str) -> Option<String> {
     let host_port = after_at.split('/').next()?;
     let host = host_port.rsplit(':').last()?;
     Some(host.to_string())
+}
+
+/// 从代理 URL 提取用户名：http://user:pass@ip:port → user
+/// Webshare 同一账号所有代理共用同一用户名，用它识别「是不是本 Webshare 账号的代理」，
+/// 比依赖 WS- label 可靠（手动复制进来的 Webshare 代理没有 WS- label）。
+fn extract_proxy_username(url: &str) -> Option<String> {
+    let after_scheme = url.split("://").nth(1)?;
+    // 必须含 `@`（即有认证信息）才提取用户名；否则 `@` 前的部分其实是 host，会误判。
+    let (creds, _rest) = after_scheme.split_once('@')?;
+    let user = creds.split(':').next()?;
+    if user.is_empty() {
+        None
+    } else {
+        Some(user.to_string())
+    }
 }
 
 /// 替换后更新全局代理：把旧 URL 替换为新的 WS- 代理 URL
@@ -282,17 +304,22 @@ pub fn spawn_background_sync(
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         pool_clone.set_auto_disable_sender(tx);
         tokio::spawn(async move {
-            let client = WebshareClient::new(token_clone);
+            let client = WebshareClient::new(token_clone.clone());
+            // 本 Webshare 账号的用户名：用它识别「失效代理是不是本账号的」，
+            // 比 WS- label 可靠（手动复制的 Webshare 代理无 label 也能触发自动替换）。
+            let ws_username = {
+                let c = WebshareClient::new(token_clone);
+                c.list_proxies()
+                    .await
+                    .ok()
+                    .and_then(|ps| ps.first().map(|p| p.username.clone()))
+            };
             while let Some(event) = rx.recv().await {
-                let is_webshare = event.url.contains("@");
-                let label_match = pool_clone
-                    .list()
-                    .iter()
-                    .find(|e| e.id == event.proxy_id)
-                    .and_then(|e| e.label.as_deref())
-                    .map(|l| l.starts_with("WS-"))
-                    .unwrap_or(false);
-                if !is_webshare || !label_match {
+                let belongs_to_webshare = match &ws_username {
+                    Some(u) => extract_proxy_username(&event.url).as_deref() == Some(u.as_str()),
+                    None => event.url.contains('@'),
+                };
+                if !belongs_to_webshare {
                     continue;
                 }
                 let old_url = event.url.clone();
@@ -330,6 +357,20 @@ mod tests {
             extract_ip_from_url("http://u:p@10.0.0.1:3128/"),
             Some("10.0.0.1".to_string())
         );
+    }
+
+    #[test]
+    fn extract_username() {
+        assert_eq!(
+            extract_proxy_username("http://njkuomhm:rxhnq53xz2bo@89.249.194.159:6558").as_deref(),
+            Some("njkuomhm")
+        );
+        assert_eq!(
+            extract_proxy_username("http://u:p@10.0.0.1:3128/").as_deref(),
+            Some("u")
+        );
+        // 无认证信息 / 空用户名 → None（不会误判为某 Webshare 账号）
+        assert_eq!(extract_proxy_username("http://1.2.3.4:8080"), None);
     }
 
     #[test]
