@@ -298,6 +298,11 @@ export function ClientKeysPage() {
                     <td className="px-4 py-3 text-right tabular-nums">{formatTokens(k.totalOutputTokens)}</td>
                     <td className="px-4 py-3 text-right tabular-nums text-[12px]">
                       <span className="text-amber-600 dark:text-amber-400">{formatCost(k.totalCost)}</span>
+                      {(k.totalCredits ?? 0) > 0 && (
+                        <div className="text-blue-600 dark:text-blue-400 text-[11px]">
+                          ≈ {(k.totalCredits ?? 0).toFixed(4)}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-[12px] text-muted-foreground">
                       {formatRelative(k.lastUsedAt)}

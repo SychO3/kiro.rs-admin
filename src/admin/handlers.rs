@@ -1506,6 +1506,8 @@ pub async fn list_traces(
                         "outcome": a.outcome,
                         "errorSnippet": a.error_snippet,
                         "durationMs": a.duration_ms,
+                        "acquireMs": a.acquire_ms,
+                        "connectMs": a.connect_ms,
                     })
                 })
                 .collect();

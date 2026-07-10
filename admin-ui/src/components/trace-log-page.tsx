@@ -202,6 +202,11 @@ function AttemptChain({ attempts }: { attempts: TraceAttempt[] }) {
           <span className="inline-flex items-center gap-1" title={attemptTitle(a)}>
             <span className="text-foreground/80">{a.endpoint || '—'}</span>
             <span className={outcomeTextColor(a.outcome)}>{a.httpStatus ?? '×'}</span>
+            {(a.acquireMs != null || a.connectMs != null) && (
+              <span className="text-muted-foreground/70 text-[11px]">
+                {a.acquireMs != null && a.acquireMs > 0 ? `${a.acquireMs}+` : ''}{a.connectMs != null ? `${a.connectMs}ms` : ''}
+              </span>
+            )}
           </span>
         </span>
       ))}
