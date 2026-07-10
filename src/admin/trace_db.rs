@@ -41,6 +41,12 @@ pub struct TraceAttempt {
     pub error_snippet: Option<String>,
     /// 本跳耗时（毫秒）
     pub duration_ms: u64,
+    /// 凭据获取 + token 刷新耗时（毫秒）；fallback 跳无 acquire 阶段时为 None
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acquire_ms: Option<u64>,
+    /// HTTP 连接耗时（毫秒）：从发起请求到收到响应头；acquire 失败时为 None
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connect_ms: Option<u64>,
 }
 
 /// 调用方使用的入口 Key 类型。
@@ -284,6 +290,25 @@ impl TraceStore {
                  THEN 'masterApiKey' ELSE 'clientKey' END WHERE key_source IS NULL;",
             )?;
         }
+
+        // trace_attempts 表迁移：补齐阶段耗时列
+        let mut attempt_cols: std::collections::HashSet<String> = std::collections::HashSet::new();
+        {
+            let mut stmt = conn.prepare("PRAGMA table_info(trace_attempts)")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+            for name in rows {
+                attempt_cols.insert(name?);
+            }
+        }
+        for (name, def) in [("acquire_ms", "INTEGER"), ("connect_ms", "INTEGER")] {
+            if !attempt_cols.contains(name) {
+                conn.execute_batch(&format!(
+                    "ALTER TABLE trace_attempts ADD COLUMN {} {};",
+                    name, def
+                ))?;
+            }
+        }
+
         Ok(())
     }
 
@@ -367,8 +392,9 @@ impl TraceStore {
             for (seq, a) in rec.attempts.iter().enumerate() {
                 tx.execute(
                     "INSERT OR REPLACE INTO trace_attempts (trace_id, attempt, credential_id, \
-                     endpoint, http_status, outcome, error_snippet, duration_ms) \
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                     endpoint, http_status, outcome, error_snippet, duration_ms, \
+                     acquire_ms, connect_ms) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
                     rusqlite::params![
                         rec.trace_id,
                         seq as i64,
@@ -378,6 +404,8 @@ impl TraceStore {
                         a.outcome,
                         a.error_snippet,
                         a.duration_ms as i64,
+                        a.acquire_ms.map(|v| v as i64),
+                        a.connect_ms.map(|v| v as i64),
                     ],
                 )?;
             }
@@ -529,7 +557,7 @@ impl TraceStore {
         // 批量取每条 trace 的 attempts
         let mut attempt_stmt = conn.prepare(
             "SELECT attempt, credential_id, endpoint, http_status, outcome, error_snippet, \
-             duration_ms FROM trace_attempts WHERE trace_id = ? ORDER BY attempt ASC",
+             duration_ms, acquire_ms, connect_ms FROM trace_attempts WHERE trace_id = ? ORDER BY attempt ASC",
         )?;
         for rec in &mut records {
             let attempts = attempt_stmt.query_map([&rec.trace_id], |row| {
@@ -541,6 +569,8 @@ impl TraceStore {
                     outcome: row.get(4)?,
                     error_snippet: row.get(5)?,
                     duration_ms: row.get::<_, i64>(6)? as u64,
+                    acquire_ms: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
+                    connect_ms: row.get::<_, Option<i64>>(8)?.map(|v| v as u64),
                 })
             })?;
             rec.attempts = attempts.collect::<rusqlite::Result<_>>()?;
@@ -750,6 +780,8 @@ CREATE TABLE IF NOT EXISTS trace_attempts (
     outcome       TEXT NOT NULL,
     error_snippet TEXT,
     duration_ms   INTEGER NOT NULL,
+    acquire_ms    INTEGER,
+    connect_ms    INTEGER,
     PRIMARY KEY (trace_id, attempt)
 );
 CREATE INDEX IF NOT EXISTS idx_attempts_trace ON trace_attempts(trace_id);
@@ -806,6 +838,8 @@ mod tests {
                     outcome: outcome::ACCOUNT_THROTTLED.to_string(),
                     error_snippet: Some("suspicious activity".to_string()),
                     duration_ms: 400,
+                    acquire_ms: Some(50),
+                    connect_ms: Some(350),
                 },
                 TraceAttempt {
                     attempt: 1,
@@ -819,6 +853,8 @@ mod tests {
                     outcome: input.status.to_string(),
                     error_snippet: None,
                     duration_ms: 800,
+                    acquire_ms: Some(100),
+                    connect_ms: Some(700),
                 },
             ],
         }

@@ -518,6 +518,10 @@ export interface TraceAttempt {
   /** 上游错误体片段（已截断） */
   errorSnippet: string | null
   durationMs: number
+  /** 凭据获取+token刷新耗时（毫秒）；fallback桶跳无此阶段 */
+  acquireMs?: number | null
+  /** HTTP连接耗时（毫秒）：发起请求到收到响应头 */
+  connectMs?: number | null
 }
 
 /** 一个外部请求的完整链路 */

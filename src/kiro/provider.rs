@@ -1000,6 +1000,7 @@ impl KiroProvider {
             } {
                 Ok(c) => c,
                 Err(e) => {
+                    let acquire_ms = Some(attempt_start.elapsed().as_millis() as u64);
                     Self::emit_attempt(
                         sink,
                         attempt,
@@ -1009,6 +1010,8 @@ impl KiroProvider {
                         outcome::UNKNOWN,
                         Some(&e.to_string()),
                         attempt_start,
+                        acquire_ms,
+                        None,
                     );
                     last_error = Some(e);
                     continue;
@@ -1026,6 +1029,8 @@ impl KiroProvider {
             // 确保 Enterprise / IdC 账号的真实 profileArn 已解析（流式端点强制要求）
             self.ensure_profile_arn(&mut ctx).await;
 
+            let acquire_ms = attempt_start.elapsed().as_millis() as u64;
+
             let config = self.token_manager.config();
             let machine_id = machine_id::generate_from_credentials(&ctx.credentials, config);
 
@@ -1041,6 +1046,8 @@ impl KiroProvider {
                         outcome::UNKNOWN,
                         Some(&e.to_string()),
                         attempt_start,
+                        Some(acquire_ms),
+                        None,
                     );
                     last_error = Some(e);
                     self.token_manager.report_failure(ctx.id);
@@ -1049,6 +1056,7 @@ impl KiroProvider {
             };
             let endpoint_name = endpoint.name();
 
+            let connect_start = Instant::now();
             let attempt_result = match self
                 .execute_api_request_with_proxy_failover(
                     &endpoint,
@@ -1061,6 +1069,7 @@ impl KiroProvider {
             {
                 Ok(result) => result,
                 Err(e) => {
+                    let connect_ms = Some(connect_start.elapsed().as_millis() as u64);
                     tracing::warn!(
                         "API 请求发送失败（尝试 {}/{}）: {}",
                         attempt + 1,
@@ -1076,6 +1085,8 @@ impl KiroProvider {
                         outcome::NETWORK_ERROR,
                         Some(&e.to_string()),
                         attempt_start,
+                        Some(acquire_ms),
+                        connect_ms,
                     );
                     // 网络错误通常是上游/链路瞬态问题，不应导致"禁用凭据"或"切换凭据"
                     // （否则一段时间网络抖动会把所有凭据都误禁用，需要重启才能恢复）
@@ -1086,6 +1097,7 @@ impl KiroProvider {
                     continue;
                 }
             };
+            let connect_ms = connect_start.elapsed().as_millis() as u64;
             let selected_proxy = attempt_result.proxy.clone();
             let response = attempt_result.response;
 
@@ -1110,6 +1122,8 @@ impl KiroProvider {
                     outcome::SUCCESS,
                     None,
                     attempt_start,
+                    Some(acquire_ms),
+                    Some(connect_ms),
                 );
                 self.token_manager.report_success(ctx.id);
                 return Ok(KiroCallResult {
@@ -1139,6 +1153,8 @@ impl KiroProvider {
                     outcome::QUOTA_EXHAUSTED,
                     Some(&body),
                     attempt_start,
+                    Some(acquire_ms),
+                    Some(connect_ms),
                 );
 
                 let has_available = self.token_manager.report_quota_exhausted(ctx.id);
@@ -1181,6 +1197,8 @@ impl KiroProvider {
                             "invalid_model_proxy",
                             Some(&body),
                             attempt_start,
+                            Some(acquire_ms),
+                            Some(connect_ms),
                         );
                         last_error = Some(anyhow::anyhow!("INVALID_MODEL_ID"));
                         continue;
@@ -1195,6 +1213,8 @@ impl KiroProvider {
                         "invalid_model_id",
                         Some(&body),
                         attempt_start,
+                        Some(acquire_ms),
+                        Some(connect_ms),
                     );
                     return Err(anyhow::anyhow!("INVALID_MODEL_ID: 上游不支持该模型"));
                 }
@@ -1207,6 +1227,8 @@ impl KiroProvider {
                     outcome::BAD_REQUEST,
                     Some(&body),
                     attempt_start,
+                    Some(acquire_ms),
+                    Some(connect_ms),
                 );
                 anyhow::bail!("{} API 请求失败: {} {}", api_type, status, body);
             }
@@ -1229,6 +1251,8 @@ impl KiroProvider {
                     outcome::AUTH_FAILED,
                     Some(&body),
                     attempt_start,
+                    Some(acquire_ms),
+                    Some(connect_ms),
                 );
 
                 // token 被上游失效：先尝试 force-refresh，每凭据仅一次机会
@@ -1279,6 +1303,7 @@ impl KiroProvider {
                 Self::emit_attempt(
                     sink, attempt, ctx.id, endpoint_name, Some(status.as_u16()),
                     outcome::BAD_REQUEST, Some(&body), attempt_start,
+                    Some(acquire_ms), Some(connect_ms),
                 );
                 anyhow::bail!("{} API 请求失败: {} {}", api_type, status, body);
             }
@@ -1295,6 +1320,7 @@ impl KiroProvider {
                 Self::emit_attempt(
                     sink, attempt, ctx.id, endpoint_name, Some(status.as_u16()),
                     outcome::TRANSIENT, Some(&body), attempt_start,
+                    Some(acquire_ms), Some(connect_ms),
                 );
                 anyhow::bail!("{} API 请求失败: {} {}", api_type, status, body);
             }
@@ -1326,6 +1352,8 @@ impl KiroProvider {
                     },
                     Some(&body),
                     attempt_start,
+                    Some(acquire_ms),
+                    Some(connect_ms),
                 );
 
                 // 沿降级链依次尝试每个备用桶（换桶不换号），命中第一个 2xx 即返回；
@@ -1355,9 +1383,11 @@ impl KiroProvider {
                     {
                         Ok(fb_resp) if fb_resp.status().is_success() => {
                             let fb_status = fb_resp.status();
+                            let fb_connect_ms = fb_start.elapsed().as_millis() as u64;
                             Self::emit_attempt(
                                 sink, attempt, ctx.id, fb_name, Some(fb_status.as_u16()),
                                 outcome::SUCCESS, None, fb_start,
+                                None, Some(fb_connect_ms),
                             );
                             self.token_manager.report_success(ctx.id);
                             tracing::info!(
@@ -1374,9 +1404,11 @@ impl KiroProvider {
                         Ok(fb_resp) => {
                             let fb_status = fb_resp.status();
                             let fb_body = fb_resp.text().await.unwrap_or_default();
+                            let fb_connect_ms = fb_start.elapsed().as_millis() as u64;
                             Self::emit_attempt(
                                 sink, attempt, ctx.id, fb_name, Some(fb_status.as_u16()),
                                 outcome::TRANSIENT, Some(&fb_body), fb_start,
+                                None, Some(fb_connect_ms),
                             );
                             tracing::warn!(
                                 "备用端点 [{}] 也失败（{}），尝试链中下一个桶",
@@ -1385,9 +1417,11 @@ impl KiroProvider {
                             );
                         }
                         Err(e) => {
+                            let fb_connect_ms = fb_start.elapsed().as_millis() as u64;
                             Self::emit_attempt(
                                 sink, attempt, ctx.id, fb_name, None,
                                 outcome::NETWORK_ERROR, Some(&e.to_string()), fb_start,
+                                None, Some(fb_connect_ms),
                             );
                             tracing::warn!(
                                 "备用端点 [{}] 请求发送失败（{}），尝试链中下一个桶",
@@ -1549,6 +1583,8 @@ impl KiroProvider {
                     outcome::BAD_REQUEST,
                     Some(&body),
                     attempt_start,
+                    Some(acquire_ms),
+                    Some(connect_ms),
                 );
                 anyhow::bail!("{} API 请求失败: {} {}", api_type, status, body);
             }
@@ -1570,6 +1606,8 @@ impl KiroProvider {
                 outcome::UNKNOWN,
                 Some(&body),
                 attempt_start,
+                Some(acquire_ms),
+                Some(connect_ms),
             );
             last_error = Some(anyhow::anyhow!(
                 "{} API 请求失败: {} {}",
@@ -1603,6 +1641,8 @@ impl KiroProvider {
         outcome: &str,
         error_body: Option<&str>,
         started: Instant,
+        acquire_ms: Option<u64>,
+        connect_ms: Option<u64>,
     ) {
         let Some(sink) = sink else { return };
         sink.on_attempt(TraceAttempt {
@@ -1613,6 +1653,8 @@ impl KiroProvider {
             outcome: outcome.to_string(),
             error_snippet: error_body.and_then(truncate_snippet),
             duration_ms: started.elapsed().as_millis() as u64,
+            acquire_ms,
+            connect_ms,
         });
     }
 

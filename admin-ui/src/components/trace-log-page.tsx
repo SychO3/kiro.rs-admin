@@ -180,6 +180,10 @@ function attemptTitle(a: TraceAttempt): string {
     `HTTP ${a.httpStatus ?? '网络失败'}`,
     formatDuration(a.durationMs),
   ]
+  const stages: string[] = []
+  if (a.acquireMs != null) stages.push(`获取凭据 ${a.acquireMs}ms`)
+  if (a.connectMs != null) stages.push(`连接 ${a.connectMs}ms`)
+  if (stages.length > 0) parts.push(`\n  ${stages.join(' · ')}`)
   if (a.errorSnippet) parts.push(`\n${a.errorSnippet}`)
   return parts.join(' · ')
 }
