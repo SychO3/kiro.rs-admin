@@ -1,9 +1,13 @@
 //! Admin API 路由配置
 
 use axum::{
-    Router, middleware,
+    Router, extract::DefaultBodyLimit, middleware,
     routing::{delete, get, post, put},
 };
+
+/// Admin 路由请求体上限 50MB。axum 默认 2MB，批量导入大量凭据的 JSON 会 413；
+/// 且本路由是 nest 到 anthropic_app 之后挂的，拿不到那边的 body limit，需单独设。
+const ADMIN_MAX_BODY_SIZE: usize = 50 * 1024 * 1024;
 
 use super::{
     handlers::{
@@ -212,7 +216,8 @@ pub fn create_admin_router(state: AdminState) -> Router {
         .layer(middleware::from_fn_with_state(
             state.clone(),
             admin_auth_middleware,
-        ));
+        ))
+        .layer(DefaultBodyLimit::max(ADMIN_MAX_BODY_SIZE));
 
     Router::new().merge(authenticated).with_state(state)
 }
