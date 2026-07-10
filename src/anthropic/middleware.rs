@@ -60,6 +60,8 @@ pub struct AppState {
     pub prompt_runtime: Option<crate::model::runtime::SharedPromptConfig>,
     /// 系统提示过滤配置
     pub prompt_filter_config: Option<Arc<ParkingRwLock<crate::model::config::PromptFilterConfig>>>,
+    /// 模型定价表（内置默认 + config 覆盖 + LiteLLM 同步）
+    pub pricing: Option<crate::model::pricing::SharedPricing>,
 }
 
 impl AppState {
@@ -82,6 +84,7 @@ impl AppState {
             models_cache: Arc::new(RwLock::new(Vec::new())),
             prompt_runtime: None,
             prompt_filter_config: None,
+            pricing: None,
         }
     }
 
@@ -134,6 +137,12 @@ impl AppState {
     /// 注入系统提示过滤配置
     pub fn with_prompt_filter_config(mut self, cfg: Option<Arc<ParkingRwLock<crate::model::config::PromptFilterConfig>>>) -> Self {
         self.prompt_filter_config = cfg;
+        self
+    }
+
+    /// 注入模型定价表
+    pub fn with_pricing(mut self, pricing: Option<crate::model::pricing::SharedPricing>) -> Self {
+        self.pricing = pricing;
         self
     }
 }

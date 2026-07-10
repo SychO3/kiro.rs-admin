@@ -325,6 +325,10 @@ async fn main() {
     let prompt_runtime = crate::model::runtime::shared_from_config(&config);
     let prompt_filter_config = std::sync::Arc::new(parking_lot::RwLock::new(config.prompt_filter.clone()));
 
+    // 初始化模型定价表（内置默认 + config 覆盖），注册为全局供 token::calculate_cost 使用
+    let pricing = std::sync::Arc::new(crate::model::pricing::PricingTable::new(&config.model_pricing));
+    crate::token::set_pricing_table(pricing.clone());
+
     let anthropic_app = anthropic::create_router(
         Some(kiro_provider.clone()),
         config.extract_thinking,
@@ -338,6 +342,7 @@ async fn main() {
         models_cache.clone(),
         Some(prompt_runtime.clone()),
         Some(prompt_filter_config.clone()),
+        Some(pricing.clone()),
     );
 
     // 构建 Admin API 路由（配置了非空 adminApiKey 时启用）
@@ -406,6 +411,37 @@ async fn main() {
             // 启动自动更新调度器：每分钟检查一次本地时间，到达 update_auto_apply_time
             // 且开启 update_auto_apply 时执行一次更新；否则静默等待。
             admin_state.service.start_auto_update_scheduler();
+
+            // 启动定价表自动同步（默认开启）：启动即拉一次 LiteLLM，之后每 24h 刷新
+            if config.pricing_auto_sync {
+                let pricing_for_sync = pricing.clone();
+                let sync_proxy = token_manager.proxy();
+                let tls_backend = config.tls_backend;
+                tokio::spawn(async move {
+                    let mut interval =
+                        tokio::time::interval(std::time::Duration::from_secs(24 * 3600));
+                    loop {
+                        interval.tick().await;
+                        match crate::model::pricing::fetch_litellm_pricing(
+                            sync_proxy.as_ref(),
+                            tls_backend,
+                        )
+                        .await
+                        {
+                            Ok(prices) => {
+                                let n = pricing_for_sync.merge(prices);
+                                if n > 0 {
+                                    tracing::info!("LiteLLM 定价同步完成：更新 {} 个模型", n);
+                                } else {
+                                    tracing::debug!("LiteLLM 定价同步完成：无变化");
+                                }
+                            }
+                            Err(e) => tracing::warn!("LiteLLM 定价同步失败：{}", e),
+                        }
+                    }
+                });
+                tracing::info!("模型定价自动同步已启动（每 24h 从 LiteLLM 刷新）");
+            }
 
             let admin_app = admin::create_admin_router(admin_state);
 

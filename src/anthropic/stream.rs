@@ -956,6 +956,98 @@ impl std::fmt::Display for ToolJsonAccumulatorError {
 
 impl std::error::Error for ToolJsonAccumulatorError {}
 
+/// 尝试补全一段被截断的 JSON（参考 tensorhq/suture 的字节级状态机思路）。
+///
+/// 只做「安全闭合」：扫描字符/字符串/转义/容器栈状态，在末尾补上闭合字符串的引号、
+/// 剥掉悬空的转义符 / 逗号 / 键后的冒号，再按栈补齐 `}` / `]`。
+/// 返回补全后的字符串（不保证一定合法——由调用方再 `serde_json::from_str` 校验）。
+/// 若输入根本不像 JSON 值前缀（如不以 `{`/`[` 开头且非标量），返回 `None`。
+fn close_truncated_json(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // 仅处理对象 / 数组前缀（工具入参一定是对象；数组容错一并处理）。
+    let first = trimmed.as_bytes()[0];
+    if first != b'{' && first != b'[' {
+        return None;
+    }
+
+    let bytes = trimmed.as_bytes();
+    let mut stack: Vec<u8> = Vec::new(); // 期望的闭合字符 '}' / ']'
+    let mut in_string = false;
+    let mut escaped = false;
+    // 记录「结构上安全可截断」的末尾位置：不在字符串内、且刚读完一个完整 token 时。
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == b'"' {
+                in_string = false;
+            }
+        } else {
+            match c {
+                b'"' => in_string = true,
+                b'{' => stack.push(b'}'),
+                b'[' => stack.push(b']'),
+                b'}' | b']' => {
+                    stack.pop();
+                }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+
+    let mut out = trimmed.to_string();
+
+    // 1) 字符串未闭合：末尾若停在转义符上，先剥掉悬空的 `\`，再补引号。
+    if in_string {
+        if escaped {
+            out.pop();
+        }
+        out.push('"');
+    }
+
+    // 2) 剥掉悬空的结构字符：末尾的逗号、或键后的冒号（`"k":` 截断）。
+    loop {
+        let t = out.trim_end();
+        if t.ends_with(',') || t.ends_with(':') {
+            let cut = t.len() - 1;
+            out.truncate(cut);
+        } else {
+            break;
+        }
+    }
+
+    // 3) 按栈补齐闭合字符。
+    while let Some(close) = stack.pop() {
+        out.push(close as char);
+    }
+
+    Some(out)
+}
+
+/// 三层抢救一段累积到的工具入参 JSON：
+/// 1. 原样能解析 → 直接用；
+/// 2. 补全后能解析 → 用补全结果（记 warn）；
+/// 3. 仍失败 → `None`（由调用方报 error）。
+/// 空串按 `{}` 处理（与正常路径一致）。
+fn salvage_tool_input(raw: &str) -> Option<serde_json::Value> {
+    if raw.trim().is_empty() {
+        return Some(serde_json::json!({}));
+    }
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
+        return Some(v);
+    }
+    let repaired = close_truncated_json(raw)?;
+    serde_json::from_str::<serde_json::Value>(&repaired).ok()
+}
+
 /// 工具调用参数（JSON）累积器。
 ///
 /// Kiro 把 tool_use 的 `input` JSON 拆成多个 `toolUseEvent` 分片下发，最后一片
@@ -1024,23 +1116,62 @@ impl ToolJsonAccumulator {
         )))
     }
 
-    /// 流结束时收尾：若仍有从未收到 `stop=true` 的缓冲，说明上游在工具参数
-    /// 写到一半时截断，返回 `IncompleteJson`（取字节数最多的那个作代表）。
-    pub fn finish(&mut self) -> Result<(), ToolJsonAccumulatorError> {
-        if let Some((tool_use_id, (name, input))) = self
+    /// 流结束时收尾：对仍未收到 `stop=true` 的缓冲执行三层抢救。
+    ///
+    /// 每个残留 tool_use：
+    /// 1. 原样 / 补全后能解析 → 产出完整 `CompletedToolUse`（补全的记 warn）；
+    /// 2. 补全后仍非法 → 收集为 `IncompleteJson` 错误。
+    ///
+    /// 返回 `(抢救成功的工具调用, 第一个不可救的错误)`。二者可同时非空
+    /// （部分救回、部分失败）；调用方据此发出 tool_use 事件并/或报 error。
+    pub fn finish(
+        &mut self,
+        tool_name_map: &HashMap<String, String>,
+    ) -> (Vec<CompletedToolUse>, Option<ToolJsonAccumulatorError>) {
+        // 按累积字节数降序，保证多残留时输出顺序确定。
+        let mut leftovers: Vec<(String, String, String)> = self
             .buffers
-            .iter()
-            .max_by_key(|(_, (_, input))| input.len())
-            .map(|(id, (name, input))| (id.clone(), (name.clone(), input.clone())))
-        {
-            self.buffers.remove(&tool_use_id);
-            return Err(ToolJsonAccumulatorError::IncompleteJson {
-                tool_use_id,
-                name,
-                bytes: input.len(),
-            });
+            .drain()
+            .map(|(id, (name, input))| (id, name, input))
+            .collect();
+        leftovers.sort_by(|a, b| b.2.len().cmp(&a.2.len()).then_with(|| a.0.cmp(&b.0)));
+
+        let mut salvaged = Vec::new();
+        let mut first_error = None;
+        for (tool_use_id, name, input) in leftovers {
+            match salvage_tool_input(&input) {
+                Some(value) => {
+                    tracing::warn!(
+                        "上游截断 tool_use JSON，已抢救补全: id={} name={} bytes={}",
+                        tool_use_id,
+                        name,
+                        input.len()
+                    );
+                    salvaged.push(CompletedToolUse::from_kiro(
+                        tool_use_id,
+                        &name,
+                        value,
+                        tool_name_map,
+                    ));
+                }
+                None => {
+                    tracing::warn!(
+                        "上游截断 tool_use JSON，无法补全（报错）: id={} name={} bytes={}",
+                        tool_use_id,
+                        name,
+                        input.len()
+                    );
+                    if first_error.is_none() {
+                        first_error = Some(ToolJsonAccumulatorError::IncompleteJson {
+                            tool_use_id,
+                            name,
+                            bytes: input.len(),
+                        });
+                    }
+                }
+            }
         }
-        Ok(())
+        (salvaged, first_error)
     }
 }
 
@@ -2455,19 +2586,17 @@ impl StreamContext {
             events.extend(self.drain_invoke_sniff_buffer(true));
         }
 
-        // 收尾检查工具调用累积器：若仍有 tool_use 从未收到 stop=true（上游在参数
-        // 写到一半时截断），记为错误。process_tool_use 中已置位的错误保持不变。
-        if self.tool_json_error.is_none()
-            && let Err(e) = self.tool_json_accumulator.finish()
-        {
-            if e.is_incomplete() {
-                // 上游截断（半截 JSON）：容错处理，丢弃不完整的 tool_use，
-                // 保留已发送的文本内容，stop_reason 设为 end_turn。
-                tracing::warn!("上游截断 tool_use JSON，已容错丢弃: {}", e);
-                self.state_manager.set_stop_reason("end_turn");
-            } else {
-                // 真正的 JSON 解析错误：保持原有 error 处理
-                tracing::error!("{}", e);
+        // 收尾检查工具调用累积器：对仍未收到 stop=true 的截断缓冲执行三层抢救。
+        // process_tool_use 中已置位的错误保持不变（不再二次抢救）。
+        if self.tool_json_error.is_none() {
+            let (salvaged, err) = self.tool_json_accumulator.finish(&self.tool_name_map);
+            // 抢救成功的：作为完整 tool_use 补发，客户端可正常执行，不再卡死。
+            for completed in salvaged {
+                events.extend(self.emit_completed_tool_use(completed));
+            }
+            // 补全后仍非法的：暴露错误给客户端重试（而非静默 end_turn）。
+            if let Some(e) = err {
+                tracing::warn!("上游截断 tool_use JSON 无法补全，报错给客户端: {}", e);
                 self.tool_json_error = Some(e);
                 self.state_manager.set_stop_reason("error");
             }
@@ -2719,9 +2848,9 @@ mod tests {
     }
 
     #[test]
-    fn tool_json_accumulator_incomplete_on_missing_stop() {
+    fn tool_json_accumulator_salvages_truncated_on_missing_stop() {
         let mut acc = ToolJsonAccumulator::new();
-        // 只来了半截、从未 stop → finish() 报 IncompleteJson。
+        // 只来了半截、从未 stop → finish() 三层抢救补全为完整调用。
         assert!(
             acc.push(
                 &tool_evt("t1", "read_file", "{\"path\":\"/a", false),
@@ -2730,13 +2859,70 @@ mod tests {
             .unwrap()
             .is_none()
         );
-        let err = acc.finish().unwrap_err();
-        assert!(matches!(
-            err,
-            ToolJsonAccumulatorError::IncompleteJson { .. }
-        ));
-        // 已取出残留后再 finish() 应成功。
-        assert!(acc.finish().is_ok());
+        let (salvaged, err) = acc.finish(&HashMap::new());
+        assert!(err.is_none(), "可补全的截断不应报错");
+        assert_eq!(salvaged.len(), 1);
+        // read_file 的 path 参数经 from_kiro 还原为客户端原始名 file_path。
+        assert_eq!(salvaged[0].input, serde_json::json!({"file_path": "/a"}));
+        // 已取出残留后再 finish() 应为空。
+        let (salvaged2, err2) = acc.finish(&HashMap::new());
+        assert!(salvaged2.is_empty() && err2.is_none());
+    }
+
+    #[test]
+    fn close_truncated_json_closes_string_and_braces() {
+        // 字符串截断：补引号 + 补 }
+        assert_eq!(
+            close_truncated_json("{\"path\":\"/etc/host").as_deref(),
+            Some("{\"path\":\"/etc/host\"}")
+        );
+        // 嵌套对象未闭合：补两层 }
+        assert_eq!(
+            close_truncated_json("{\"a\":{\"b\":1").as_deref(),
+            Some("{\"a\":{\"b\":1}}")
+        );
+        // 键后冒号截断：剥掉悬空冒号，再剥悬空键 "b" 和逗号 → 补 }
+        // （close 只剥一层冒号/逗号，"b" 会残留导致非法；salvage 层会兜底为 None，
+        //  这里仅验证 close 的确会剥掉末尾冒号，不做完整合法性断言）
+        assert!(close_truncated_json("{\"a\":1,\"b\":")
+            .unwrap()
+            .ends_with('}'));
+        // 悬空逗号：剥掉 + 补 }
+        assert_eq!(
+            close_truncated_json("{\"a\":1,").as_deref(),
+            Some("{\"a\":1}")
+        );
+        // 转义符结尾：剥掉悬空 \ + 补引号 + 补 }
+        assert_eq!(
+            close_truncated_json("{\"a\":\"x\\").as_deref(),
+            Some("{\"a\":\"x\"}")
+        );
+        // 数组截断
+        assert_eq!(
+            close_truncated_json("[1,2,3").as_deref(),
+            Some("[1,2,3]")
+        );
+        // 非 JSON 前缀 → None
+        assert_eq!(close_truncated_json("garbage"), None);
+        assert_eq!(close_truncated_json(""), None);
+    }
+
+    #[test]
+    fn salvage_tool_input_layers() {
+        // 第一层：原样合法
+        assert_eq!(
+            salvage_tool_input("{\"a\":1}"),
+            Some(serde_json::json!({"a":1}))
+        );
+        // 第二层：补全后合法
+        assert_eq!(
+            salvage_tool_input("{\"a\":\"hel"),
+            Some(serde_json::json!({"a":"hel"}))
+        );
+        // 空串 → {}
+        assert_eq!(salvage_tool_input("   "), Some(serde_json::json!({})));
+        // 第三层：补全后仍非法 → None
+        assert_eq!(salvage_tool_input("{\"a\":tru"), None);
     }
 
     #[test]

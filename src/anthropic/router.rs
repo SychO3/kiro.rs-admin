@@ -45,6 +45,7 @@ pub fn create_router_with_provider(
         Arc::new(tokio::sync::RwLock::new(Vec::new())),
         None,
         None,
+        None,
     )
 }
 
@@ -63,6 +64,7 @@ pub fn create_router(
     models_cache: Arc<tokio::sync::RwLock<Vec<crate::anthropic::types::Model>>>,
     prompt_runtime: Option<crate::model::runtime::SharedPromptConfig>,
     prompt_filter_config: Option<std::sync::Arc<parking_lot::RwLock<crate::model::config::PromptFilterConfig>>>,
+    pricing: Option<crate::model::pricing::SharedPricing>,
 ) -> Router {
     let mut state = AppState::new(extract_thinking, tool_compatibility_mode);
     if let Some(provider) = kiro_provider {
@@ -74,6 +76,7 @@ pub fn create_router(
     state = state.with_model_mappings(model_mappings);
     state = state.with_prompt_runtime(prompt_runtime);
     state = state.with_prompt_filter_config(prompt_filter_config);
+    state = state.with_pricing(pricing);
     state.models_cache = models_cache;
 
     // 需要认证的 /v1 路由

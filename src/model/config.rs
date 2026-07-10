@@ -433,6 +433,14 @@ pub struct Config {
     #[serde(default)]
     pub prompt_filter: PromptFilterConfig,
 
+    /// 模型定价覆盖表（USD/1M tokens）。空表则全用内置默认 + LiteLLM 同步。
+    #[serde(default)]
+    pub model_pricing: HashMap<String, crate::model::pricing::ModelPrice>,
+
+    /// 是否自动从 LiteLLM 同步定价（默认 true）
+    #[serde(default = "default_true")]
+    pub pricing_auto_sync: bool,
+
     /// 配置文件路径（运行时元数据，不写入 JSON）
     #[serde(skip)]
     config_path: Option<PathBuf>,
@@ -575,6 +583,8 @@ impl Default for Config {
             system_prompt: None,
             system_prompt_position: SystemPromptPosition::default(),
             prompt_filter: PromptFilterConfig::default(),
+            model_pricing: HashMap::new(),
+            pricing_auto_sync: true,
             config_path: None,
         }
     }

@@ -76,23 +76,35 @@ impl UsageRecordHook {
         credits: f64,
         status: &str,
     ) {
-        let cost = crate::token::calculate_cost(
-            &self.model,
-            input_tokens.max(0) as u64,
-            output_tokens.max(0) as u64,
-            cache_creation_tokens.max(0) as u64,
-            cache_read_tokens.max(0) as u64,
-        );
+        let succeeded = status == "success";
+        // 失败请求（INVALID_MODEL_ID / 4xx / 5xx 等）不产生真实计费，
+        // token / credits / cost 全部归零，避免污染用量统计。
+        let (in_tok, out_tok, cc_tok, cr_tok) = if succeeded {
+            (
+                input_tokens.max(0) as u64,
+                output_tokens.max(0) as u64,
+                cache_creation_tokens.max(0) as u64,
+                cache_read_tokens.max(0) as u64,
+            )
+        } else {
+            (0, 0, 0, 0)
+        };
+        // 费用：优先用定价表；找不到定价（或未注入）记 0。
+        let cost = if succeeded {
+            crate::token::calculate_cost(&self.model, in_tok, out_tok, cc_tok, cr_tok)
+        } else {
+            0.0
+        };
         let rec = UsageRecord {
             ts: Utc::now().to_rfc3339(),
             key_id: self.key_id,
             credential_id,
             model: self.model.clone(),
-            input_tokens: input_tokens.max(0) as u64,
-            output_tokens: output_tokens.max(0) as u64,
-            cache_creation_tokens: cache_creation_tokens.max(0) as u64,
-            cache_read_tokens: cache_read_tokens.max(0) as u64,
-            credits: if credits.is_finite() && credits > 0.0 {
+            input_tokens: in_tok,
+            output_tokens: out_tok,
+            cache_creation_tokens: cc_tok,
+            cache_read_tokens: cr_tok,
+            credits: if succeeded && credits.is_finite() && credits > 0.0 {
                 credits
             } else {
                 0.0
@@ -107,7 +119,7 @@ impl UsageRecordHook {
         if let Some(a) = &self.aggregator {
             a.ingest(&rec);
         }
-        if status == "success" && self.key_id != 0 {
+        if succeeded && self.key_id != 0 {
             if let Some(m) = &self.client_keys {
                 m.record_usage(
                     self.key_id,
@@ -1311,24 +1323,22 @@ async fn handle_non_stream_request(
         }
     }
 
-    // 收尾：若仍有未收到 stop=true 的工具调用缓冲（上游在参数写到一半时截断），
-    // finish() 返回 IncompleteJson。已有错误则保持不变。
-    if tool_json_error.is_none()
-        && let Err(e) = tool_accumulator.finish()
-    {
-        if e.is_incomplete() {
-            // 上游截断（半截 JSON）：容错处理，丢弃不完整的 tool_use，
-            // 保留已收到的文本内容，当作 end_turn 返回。
-            tracing::warn!("上游截断 tool_use JSON，已容错丢弃: {}", e);
-            has_tool_use = false;
-            stop_reason = "end_turn".to_string();
-        } else {
-            tracing::error!("{}", e);
+    // 收尾：对仍未收到 stop=true 的截断缓冲执行三层抢救。已有错误则保持不变。
+    if tool_json_error.is_none() {
+        let (salvaged, err) = tool_accumulator.finish(&tool_name_map);
+        // 抢救成功的：作为完整 tool_use 块加入响应，客户端可正常执行。
+        for completed in salvaged {
+            has_tool_use = true;
+            tool_uses.push(completed.to_anthropic_block());
+        }
+        // 补全后仍非法的：非流式尚未发送任何字节，直接回 502 让客户端重试。
+        if let Some(e) = err {
+            tracing::warn!("上游截断 tool_use JSON 无法补全，报错给客户端: {}", e);
             tool_json_error = Some(e);
         }
     }
 
-    // 工具调用 JSON 非法（解析失败，非截断）：非流式路径尚未发送任何字节，直接回 502。
+    // 工具调用 JSON 错误（解析失败或截断且无法补全）：非流式路径尚未发送任何字节，直接回 502。
     if let Some(err) = tool_json_error {
         let message = err.message();
         hook.record(credential_id, input_tokens, 0, 0, 0, 0.0, "error");
@@ -2011,6 +2021,7 @@ fn inject_system_prompt(
         (cfg.build_injection_text(), cfg.position)
     };
     let Some(text) = injection else { return };
+    tracing::debug!("系统提示注入: {}字符, 位置={:?}", text.len(), position);
     let injected = SystemMessage {
         text,
         cache_control: None,

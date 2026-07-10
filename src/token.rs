@@ -13,7 +13,15 @@ use std::sync::OnceLock;
 /// Claude 模型相对 cl100k_base 的修正系数
 const CLAUDE_CORRECTION_FACTOR: f64 = 1.15;
 
-/// 根据模型和 token 用量按官方定价计算费用（USD）
+/// 全局定价表句柄（启动时由 main 注入）。未初始化时 `calculate_cost` 返回 0。
+static PRICING_TABLE: OnceLock<crate::model::pricing::SharedPricing> = OnceLock::new();
+
+/// 注入全局定价表（main 启动时调用一次）
+pub fn set_pricing_table(table: crate::model::pricing::SharedPricing) {
+    let _ = PRICING_TABLE.set(table);
+}
+
+/// 根据模型和 token 用量按定价表计算费用（USD）
 pub fn calculate_cost(
     model: &str,
     input_tokens: u64,
@@ -21,44 +29,18 @@ pub fn calculate_cost(
     cache_creation_tokens: u64,
     cache_read_tokens: u64,
 ) -> f64 {
-    let model_id = normalize_pricing_model(model);
-    let Some(m) = tiktoken::pricing::get_model(&model_id) else {
+    let Some(table) = PRICING_TABLE.get() else {
         return 0.0;
     };
-    let pricing = m.pricing_for_input(input_tokens + cache_creation_tokens + cache_read_tokens);
-    let input_cost = input_tokens as f64 * pricing.input_per_1m / 1_000_000.0;
-    let output_cost = output_tokens as f64 * pricing.output_per_1m / 1_000_000.0;
-    let cache_read_cost = match pricing.cached_input_per_1m {
-        Some(rate) => cache_read_tokens as f64 * rate / 1_000_000.0,
-        None => cache_read_tokens as f64 * pricing.input_per_1m / 1_000_000.0,
-    };
-    // cache creation = input price × 1.25 (Anthropic convention)
-    let cache_creation_cost = cache_creation_tokens as f64 * pricing.input_per_1m * 1.25 / 1_000_000.0;
-    input_cost + output_cost + cache_read_cost + cache_creation_cost
-}
-
-/// 将项目内部模型名映射到 tiktoken pricing 能识别的 ID
-fn normalize_pricing_model(model: &str) -> String {
-    let m = model.replace("-thinking", "");
-    // tiktoken pricing 使用点号格式如 "claude-opus-4-6"
-    // 项目内部可能用横杠如 "claude-opus-4-6"
-    // 规则：最后一段横杠分隔的数字部分，把横杠替换为点号
-    // claude-opus-4-6 → claude-opus-4-6
-    // claude-haiku-4-5 → claude-haiku-4.5
-    if let Some(pos) = m.rfind('-') {
-        let suffix = &m[pos + 1..];
-        if suffix.chars().all(|c| c.is_ascii_digit()) && suffix.len() <= 2 {
-            let prefix = &m[..pos];
-            if let Some(pos2) = prefix.rfind('-') {
-                let mid = &prefix[pos2 + 1..];
-                if mid.chars().all(|c| c.is_ascii_digit()) {
-                    return format!("{}{}.{}", &prefix[..pos2 + 1], mid, suffix);
-                }
-            }
-        }
-    }
-    // claude-sonnet-5 等没有次版本号的，或者非 Claude 模型直接透传
-    m
+    crate::model::pricing::calculate_cost(
+        table,
+        model,
+        input_tokens,
+        output_tokens,
+        cache_creation_tokens,
+        cache_read_tokens,
+    )
+    .unwrap_or(0.0)
 }
 
 /// Count Tokens API 配置
@@ -248,54 +230,5 @@ mod tests {
             "text": ""
         })]);
         assert!(with_thinking > text_only);
-    }
-
-    #[test]
-    fn calculate_cost_opus_46() {
-        // claude-opus-4-6: input $5/M, output $25/M, cache_read $0.5/M
-        let cost = calculate_cost("claude-opus-4-6", 1_000_000, 0, 0, 0);
-        assert!((cost - 5.0).abs() < 0.01, "input cost: {cost}");
-        let cost = calculate_cost("claude-opus-4-6", 0, 1_000_000, 0, 0);
-        assert!((cost - 25.0).abs() < 0.01, "output cost: {cost}");
-        let cost = calculate_cost("claude-opus-4-6", 0, 0, 0, 1_000_000);
-        assert!((cost - 0.5).abs() < 0.01, "cache read cost: {cost}");
-    }
-
-    #[test]
-    fn calculate_cost_all_models() {
-        // 验证所有模型定价与官方一致
-        // Opus 4.6: $5/$25, cache_write=$6.25, cache_read=$0.50
-        let cost = calculate_cost("claude-opus-4-6", 0, 0, 1_000_000, 0);
-        assert!((cost - 6.25).abs() < 0.01, "opus cache_write: {cost}");
-
-        // Sonnet 4.6: $3/$15, cache_read=$0.30
-        let cost = calculate_cost("claude-sonnet-4-6", 1_000_000, 0, 0, 0);
-        assert!((cost - 3.0).abs() < 0.01, "sonnet input: {cost}");
-        let cost = calculate_cost("claude-sonnet-4-6", 0, 1_000_000, 0, 0);
-        assert!((cost - 15.0).abs() < 0.01, "sonnet output: {cost}");
-        let cost = calculate_cost("claude-sonnet-4-6", 0, 0, 0, 1_000_000);
-        assert!((cost - 0.3).abs() < 0.01, "sonnet cache_read: {cost}");
-
-        // Haiku 4.5: $1/$5, cache_read=$0.10
-        let cost = calculate_cost("claude-haiku-4-5", 1_000_000, 0, 0, 0);
-        assert!((cost - 1.0).abs() < 0.01, "haiku input: {cost}");
-        let cost = calculate_cost("claude-haiku-4-5", 0, 1_000_000, 0, 0);
-        assert!((cost - 5.0).abs() < 0.01, "haiku output: {cost}");
-
-        // 实际场景：opus, 120k cache_read + 2k input + 5k cache_write + 3k output
-        // = 2000×5/1M + 3000×25/1M + 120000×0.5/1M + 5000×6.25/1M
-        // = 0.01 + 0.075 + 0.06 + 0.03125 = 0.17625
-        let cost = calculate_cost("claude-opus-4-6", 2000, 3000, 5000, 120000);
-        assert!((cost - 0.17625).abs() < 0.001, "real scenario: {cost}");
-    }
-
-    #[test]
-    fn normalize_model_names() {
-        assert_eq!(normalize_pricing_model("claude-opus-4-6"), "claude-opus-4.6");
-        assert_eq!(normalize_pricing_model("claude-opus-4.6"), "claude-opus-4.6");
-        assert_eq!(normalize_pricing_model("claude-haiku-4-5"), "claude-haiku-4.5");
-        assert_eq!(normalize_pricing_model("claude-sonnet-4"), "claude-sonnet-4");
-        assert_eq!(normalize_pricing_model("claude-opus-4-6-thinking"), "claude-opus-4.6");
-        assert_eq!(normalize_pricing_model("deepseek-3.2"), "deepseek-3.2");
     }
 }

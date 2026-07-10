@@ -772,6 +772,11 @@ impl KiroProvider {
                 self.token_manager.record_request(ctx.id);
             }
 
+            // 解析真实 profileArn 并回填 api_region（IDC 账号 profile 可能在 eu-central-1，
+            // 否则 MCP 请求会发到默认 us-east-1 导致 400 Improperly formed request）。
+            let mut ctx = ctx;
+            self.ensure_profile_arn(&mut ctx).await;
+
             let config = self.token_manager.config();
             let machine_id = machine_id::generate_from_credentials(&ctx.credentials, config);
 
