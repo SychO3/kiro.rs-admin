@@ -1,7 +1,8 @@
-import { forwardRef, useEffect, useState, type ComponentPropsWithoutRef } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Activity, Link, RefreshCw, UploadCloud, Settings, Key, Wand2, Eye, EyeOff, Copy,
   MoreHorizontal, ShieldAlert, ShieldCheck, Gauge, Shuffle, MessageSquarePlus,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -14,7 +15,7 @@ import {
 } from '@/components/ui/dialog'
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
-  DropdownMenuItem, DropdownMenuLabel,
+  DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import {
   useLoadBalancingMode, useSetLoadBalancingMode,
@@ -303,16 +304,7 @@ interface ToolControls {
 function FullTools({ controls }: { controls: ToolControls }) {
   return (
     <>
-      <LoadBalancingButton controls={controls} />
-      <RetryPolicyButton controls={controls} />
-      <ThrottleConfigButton
-        config={controls.throttleConfig}
-        loading={controls.isLoadingThrottle}
-        saving={controls.isSettingThrottle}
-        onToggleFailover={controls.handleToggleFailover}
-        onChangeCooldown={controls.updateCooldown}
-      />
-      <AdaptiveRpmButton controls={controls} />
+      <SchedulingMenu controls={controls} />
       <RefreshButton onRefresh={controls.handleRefresh} />
       <ImageUpdateButton controls={controls} />
       <KeySettingsMenu
@@ -321,6 +313,65 @@ function FullTools({ controls }: { controls: ToolControls }) {
         onOpenSystemPrompt={controls.openSystemPrompt}
       />
     </>
+  )
+}
+
+/**
+ * 调度设置下拉：把负载均衡 / 亲和性 / 自适应RPM 三个开关，
+ * 以及 429 重试策略、账号级故障转移冷却，全部收进一个入口，
+ * 避免顶栏平铺一排按钮。移动端(CompactTools)仍走各自的紧凑项。
+ */
+function SchedulingMenu({ controls }: { controls: ToolControls }) {
+  const modeBusy = controls.isLoadingMode || controls.isSettingMode
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" title="调度设置：负载均衡 / 亲和性 / 自适应RPM / 429 策略 / 故障转移">
+          <SlidersHorizontal className="h-3.5 w-3.5" />
+          <span className="hidden md:inline">调度</span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-[28rem] max-w-[calc(100vw-2rem)]">
+        <DropdownMenuLabel>负载调度</DropdownMenuLabel>
+        <DropdownMenuItem
+          disabled={modeBusy}
+          onSelect={(e) => { e.preventDefault(); controls.handleToggleLoadBalancing() }}
+        >
+          <Activity />
+          {controls.isLoadingMode
+            ? '负载均衡加载中'
+            : `均衡模式：${LB_LABEL[controls.loadBalancingMode ?? 'priority']}（点击切换）`}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={modeBusy}
+          onSelect={(e) => { e.preventDefault(); controls.handleToggleAffinity() }}
+        >
+          <Link />
+          {controls.affinityEnabled ? '关闭客户端亲和性' : '开启客户端亲和性'}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={controls.isLoadingAdaptiveRpm || controls.isSettingAdaptiveRpm}
+          onSelect={(e) => { e.preventDefault(); controls.handleToggleAdaptiveRpm() }}
+        >
+          <Gauge />
+          {controls.isLoadingAdaptiveRpm
+            ? '自适应 RPM 加载中'
+            : controls.adaptiveRpmEnabled
+              ? '关闭自适应 RPM'
+              : '开启自适应 RPM'}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <RetryCompactItems controls={controls} />
+        <DropdownMenuSeparator />
+        <ThrottleCompactItems
+          config={controls.throttleConfig}
+          loading={controls.isLoadingThrottle}
+          saving={controls.isSettingThrottle}
+          onToggleFailover={controls.handleToggleFailover}
+          onChangeCooldown={controls.updateCooldown}
+        />
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -393,46 +444,6 @@ function CompactTools({ controls }: { controls: ToolControls }) {
   )
 }
 
-function AdaptiveRpmButton({ controls }: { controls: ToolControls }) {
-  return (
-    <Button
-      variant={controls.adaptiveRpmEnabled ? 'default' : 'outline'}
-      size="sm"
-      onClick={controls.handleToggleAdaptiveRpm}
-      disabled={controls.isLoadingAdaptiveRpm || controls.isSettingAdaptiveRpm}
-      title="自适应 RPM：命中 429 时自动降速，成功时缓慢回升（AIMD）"
-    >
-      <Gauge className="h-3.5 w-3.5" />
-      <span className="hidden md:inline">
-        {controls.isLoadingAdaptiveRpm
-          ? '加载中…'
-          : controls.adaptiveRpmEnabled
-            ? '自适应 RPM · 开'
-            : '自适应 RPM · 关'}
-      </span>
-    </Button>
-  )
-}
-
-function LoadBalancingButton({ controls }: { controls: ToolControls }) {
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={controls.handleToggleLoadBalancing}
-      disabled={controls.isLoadingMode || controls.isSettingMode}
-      title="切换负载均衡模式"
-    >
-      <Activity className="h-3.5 w-3.5" />
-      <span className="hidden md:inline">
-        {controls.isLoadingMode
-          ? '加载中…'
-          : LB_LABEL[controls.loadBalancingMode ?? 'priority']}
-      </span>
-    </Button>
-  )
-}
-
 const RETRY_MODES: RetryMode[] = [
   'failover',
   'turbo',
@@ -470,96 +481,6 @@ const DEFAULT_CUSTOM_RETRY_POLICY: RetryPolicy = {
   maxBackoffMs: 2000,
   credentialSwitchOn429: true,
   respectRetryAfter: false,
-}
-
-function RetryPolicyButton({ controls }: { controls: ToolControls }) {
-  const [open, setOpen] = useState(false)
-  const [customPolicy, setCustomPolicy] = useState<RetryPolicy>(DEFAULT_CUSTOM_RETRY_POLICY)
-  const activeMode = controls.retryPolicy?.mode ?? 'failover'
-  const effective = controls.retryPolicy?.effectivePolicy
-
-  useEffect(() => {
-    if (controls.retryPolicy?.customPolicy) {
-      setCustomPolicy(controls.retryPolicy.customPolicy)
-    } else if (controls.retryPolicy?.mode === 'custom' && controls.retryPolicy.effectivePolicy) {
-      setCustomPolicy(controls.retryPolicy.effectivePolicy)
-    }
-  }, [controls.retryPolicy?.customPolicy, controls.retryPolicy?.effectivePolicy, controls.retryPolicy?.mode])
-
-  const updateNumber = (key: keyof RetryPolicy, value: string) => {
-    const numeric = Number(value)
-    setCustomPolicy((prev) => ({
-      ...prev,
-      [key]: Number.isFinite(numeric) ? numeric : 0,
-    }))
-  }
-
-  const applyMode = (mode: RetryMode, custom = customPolicy) => {
-    controls.setRetryPolicy(mode, mode === 'custom' ? custom : null)
-  }
-
-  return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={controls.isLoadingRetry || controls.isSettingRetry}
-          title={retryPolicyTitle(controls.isLoadingRetry, activeMode, effective)}
-        >
-          <Gauge className="h-3.5 w-3.5" />
-          <span className="hidden md:inline">
-            {controls.isLoadingRetry ? '429…' : RETRY_MODE_LABELS[activeMode]}
-          </span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-[28rem] max-w-[calc(100vw-2rem)]">
-        <DropdownMenuLabel>普通 429 重试策略</DropdownMenuLabel>
-        <div className="space-y-3 px-2 pb-2">
-          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-            {RETRY_MODES.map((mode) => (
-              <Button
-                key={mode}
-                type="button"
-                size="sm"
-                variant={activeMode === mode ? 'default' : 'outline'}
-                className="h-auto min-h-8 justify-start px-2 py-1.5 text-xs"
-                disabled={controls.isLoadingRetry || controls.isSettingRetry}
-                title={RETRY_MODE_DESCRIPTIONS[mode]}
-                onClick={() => applyMode(mode)}
-              >
-                {RETRY_MODE_LABELS[mode]}
-              </Button>
-            ))}
-          </div>
-          <div className="rounded-md bg-secondary/40 px-2.5 py-2 text-xs">
-            <div className="font-medium text-foreground">
-              {RETRY_MODE_LABELS[activeMode]}
-            </div>
-            <p className="mt-1 leading-snug text-muted-foreground">
-              {RETRY_MODE_DESCRIPTIONS[activeMode]}
-            </p>
-            {effective && (
-              <div className="mt-2 text-muted-foreground">
-                {retryPolicySummary(effective)}
-              </div>
-            )}
-          </div>
-          {activeMode === 'custom' && (
-            <CustomRetryPolicyForm
-              policy={customPolicy}
-              saving={controls.isSettingRetry}
-              onApply={() => applyMode('custom', customPolicy)}
-              onBoolChange={(key, checked) =>
-                setCustomPolicy((prev) => ({ ...prev, [key]: checked }))
-              }
-              onNumberChange={updateNumber}
-            />
-          )}
-        </div>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
 }
 
 function CustomRetryPolicyForm({
@@ -664,39 +585,69 @@ function RetrySwitch({
 }
 
 function RetryCompactItems({ controls }: { controls: ToolControls }) {
+  const [customPolicy, setCustomPolicy] = useState<RetryPolicy>(DEFAULT_CUSTOM_RETRY_POLICY)
   const activeMode = controls.retryPolicy?.mode ?? 'failover'
+  const effective = controls.retryPolicy?.effectivePolicy
   const busy = controls.isLoadingRetry || controls.isSettingRetry
+
+  useEffect(() => {
+    if (controls.retryPolicy?.customPolicy) {
+      setCustomPolicy(controls.retryPolicy.customPolicy)
+    } else if (controls.retryPolicy?.mode === 'custom' && controls.retryPolicy.effectivePolicy) {
+      setCustomPolicy(controls.retryPolicy.effectivePolicy)
+    }
+  }, [controls.retryPolicy?.customPolicy, controls.retryPolicy?.effectivePolicy, controls.retryPolicy?.mode])
+
+  const updateNumber = (key: keyof RetryPolicy, value: string) => {
+    const numeric = Number(value)
+    setCustomPolicy((prev) => ({ ...prev, [key]: Number.isFinite(numeric) ? numeric : 0 }))
+  }
+
+  const applyMode = (mode: RetryMode, custom = customPolicy) => {
+    controls.setRetryPolicy(mode, mode === 'custom' ? custom : null)
+  }
 
   return (
     <>
       <DropdownMenuLabel>普通 429 策略</DropdownMenuLabel>
-      <div className="grid grid-cols-2 gap-1 px-2 pb-2">
-        {RETRY_MODES.filter((mode) => mode !== 'custom').map((mode) => (
-          <Button
-            key={mode}
-            type="button"
-            size="sm"
-            variant={activeMode === mode ? 'default' : 'outline'}
-            className="h-7 justify-start text-xs"
-            disabled={busy}
-            title={RETRY_MODE_DESCRIPTIONS[mode]}
-            onClick={() => controls.setRetryPolicy(mode, null)}
-          >
-            {RETRY_MODE_LABELS[mode]}
-          </Button>
-        ))}
-      </div>
-      <div className="px-2 pb-2 text-[11px] leading-snug text-muted-foreground">
-        {RETRY_MODE_DESCRIPTIONS[activeMode]}
+      <div className="space-y-2 px-2 pb-2">
+        <div className="grid grid-cols-2 gap-1 sm:grid-cols-3">
+          {RETRY_MODES.map((mode) => (
+            <Button
+              key={mode}
+              type="button"
+              size="sm"
+              variant={activeMode === mode ? 'default' : 'outline'}
+              className="h-7 justify-start text-xs"
+              disabled={busy}
+              title={RETRY_MODE_DESCRIPTIONS[mode]}
+              onClick={() => applyMode(mode)}
+            >
+              {RETRY_MODE_LABELS[mode]}
+            </Button>
+          ))}
+        </div>
+        <div className="rounded-md bg-secondary/40 px-2.5 py-2 text-[11px] leading-snug">
+          <div className="font-medium text-foreground">{RETRY_MODE_LABELS[activeMode]}</div>
+          <p className="mt-1 text-muted-foreground">{RETRY_MODE_DESCRIPTIONS[activeMode]}</p>
+          {effective && (
+            <div className="mt-1 text-muted-foreground">{retryPolicySummary(effective)}</div>
+          )}
+        </div>
+        {activeMode === 'custom' && (
+          <CustomRetryPolicyForm
+            policy={customPolicy}
+            saving={controls.isSettingRetry}
+            onApply={() => applyMode('custom', customPolicy)}
+            onBoolChange={(key, checked) =>
+              setCustomPolicy((prev) => ({ ...prev, [key]: checked }))
+            }
+            onNumberChange={updateNumber}
+          />
+        )}
       </div>
     </>
   )
-}
-
-function retryPolicyTitle(loading: boolean, mode: RetryMode, policy?: RetryPolicy) {
-  if (loading) return '429 策略加载中…'
-  if (!policy) return `普通 429 策略：${RETRY_MODE_LABELS[mode]}`
-  return `普通 429 策略：${RETRY_MODE_LABELS[mode]}（${retryPolicySummary(policy)}）`
 }
 
 function retryPolicySummary(policy: RetryPolicy) {
@@ -800,12 +751,6 @@ interface CustomCooldownFormProps {
   onSubmit: (e: React.FormEvent) => void
 }
 
-interface ThrottleTriggerProps extends ComponentPropsWithoutRef<typeof Button> {
-  loading: boolean
-  saving: boolean
-  state: ThrottleState
-}
-
 const COOLDOWN_PRESETS = [
   { label: '5 分钟', secs: 5 * 60 },
   { label: '15 分钟', secs: 15 * 60 },
@@ -818,123 +763,6 @@ const DEFAULT_COOLDOWN_SECS = 30 * 60
 const SECONDS_PER_MINUTE = 60
 const MIN_CUSTOM_COOLDOWN_MINUTES = 1
 const MAX_CUSTOM_COOLDOWN_MINUTES = 1440
-
-/**
- * 故障转移开关 + 冷却时长设置（紧凑下拉）
- *
- * 主按钮文案显示当前状态；下拉里:
- * - 顶部一个 Switch 切换 failover
- * - 5 个预设时长 + 一个自定义输入（分钟）
- */
-function ThrottleConfigButton({
-  config, loading, saving, onToggleFailover, onChangeCooldown,
-}: ThrottleConfigButtonProps) {
-  const [open, setOpen] = useState(false)
-  const [customMin, setCustomMin] = useState('')
-  const state = readThrottleState(config)
-
-  useEffect(() => {
-    if (!open) setCustomMin('')
-  }, [open])
-
-  const submitCustom = (e: React.FormEvent) => {
-    e.preventDefault()
-    const min = parseInt(customMin, 10)
-    if (invalidCooldownMinutes(min)) {
-      toast.error('请输入 1-1440 之间的分钟数')
-      return
-    }
-    onChangeCooldown(min * SECONDS_PER_MINUTE)
-    setOpen(false)
-  }
-
-  return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
-      <DropdownMenuTrigger asChild>
-        <ThrottleTrigger loading={loading} saving={saving} state={state} />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64">
-        <ThrottleStatusPanel
-          saving={saving}
-          state={state}
-          onToggleFailover={onToggleFailover}
-        />
-        <ThrottleCooldownPanel
-          customMin={customMin}
-          saving={saving}
-          state={state}
-          onChangeCooldown={onChangeCooldown}
-          onCustomMinChange={setCustomMin}
-          onDone={() => setOpen(false)}
-          onSubmitCustom={submitCustom}
-        />
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
-const ThrottleTrigger = forwardRef<HTMLButtonElement, ThrottleTriggerProps>(
-  function ThrottleTrigger({ loading, saving, state, ...props }, ref) {
-    return (
-      <Button
-        {...props}
-        ref={ref}
-        variant="outline"
-        size="sm"
-        disabled={loading || saving}
-        title={throttleTitle(loading, state)}
-      >
-        {state.failover ? (
-          <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
-        ) : (
-          <ShieldAlert className="h-3.5 w-3.5 text-amber-500" />
-        )}
-        <span className="hidden md:inline">
-          {throttleTriggerText(loading, state)}
-        </span>
-      </Button>
-    )
-  },
-)
-
-function ThrottleStatusPanel({
-  saving, state, onToggleFailover,
-}: {
-  saving: boolean
-  state: ThrottleState
-  onToggleFailover: () => void
-}) {
-  return (
-    <>
-      <DropdownMenuLabel>账号级风控故障转移</DropdownMenuLabel>
-      <div className="px-2 pb-2">
-        <div className="flex items-center justify-between gap-2 rounded-md bg-secondary/40 px-2.5 py-2">
-          <ThrottleStatusText failover={state.failover} />
-          <Switch
-            checked={state.failover}
-            disabled={saving}
-            onCheckedChange={() => onToggleFailover()}
-          />
-        </div>
-      </div>
-    </>
-  )
-}
-
-function ThrottleStatusText({ failover }: { failover: boolean }) {
-  return (
-    <div className="text-xs">
-      <div className="font-medium text-foreground">
-        {failover ? '开启' : '关闭'}
-      </div>
-      <div className="text-muted-foreground leading-snug">
-        {failover
-          ? '上游对当前账号触发临时限速时，自动冷却该凭据并切换到下一个可用凭据'
-          : '上游对当前账号触发临时限速时，仅按瞬态错误重试，不切换凭据'}
-      </div>
-    </div>
-  )
-}
 
 function ThrottleCooldownPanel({
   customMin, saving, state, onChangeCooldown, onCustomMinChange, onDone, onSubmitCustom,
@@ -1104,18 +932,6 @@ function readThrottleState(
     cooldownSecs,
     failover: config?.failover ?? true,
   }
-}
-
-function throttleTitle(loading: boolean, state: ThrottleState) {
-  if (loading) return '加载中…'
-  if (!state.failover) return '账号级风控故障转移：关闭'
-  return `账号级风控故障转移：开启（冷却 ${state.cooldownMin} 分钟）`
-}
-
-function throttleTriggerText(loading: boolean, state: ThrottleState) {
-  if (loading) return '加载中…'
-  if (!state.failover) return '不切换'
-  return `故障转移 · ${state.cooldownMin}m`
 }
 
 function compactThrottleText(loading: boolean, state: ThrottleState) {
