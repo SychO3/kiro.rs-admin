@@ -104,7 +104,15 @@ function StatusBadge({ status }: { status: string }) {
 function formatTime(ts: string): string {
   const d = new Date(ts)
   if (isNaN(d.getTime())) return ts
-  return d.toLocaleString('zh-CN', { hour12: false })
+  // 去掉年份，只显示 月/日 时:分:秒（年份多余）
+  return d.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
 }
 
 function formatDuration(ms: number): string {

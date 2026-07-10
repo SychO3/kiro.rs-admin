@@ -1185,9 +1185,11 @@ export function CredentialCard({
                 disabled={loadingBalance || credential.disabled}
                 title={credential.disabled ? "已禁用" : "刷新配额"}
               >
-                <RefreshCw
-                  className={`h-3.5 w-3.5 ${loadingBalance ? "animate-spin" : ""}`}
-                />
+                {loadingBalance ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Wallet className="h-3.5 w-3.5" />
+                )}
                 <span className="hidden sm:inline">刷新配额</span>
               </Button>
             </div>
