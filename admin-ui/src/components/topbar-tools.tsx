@@ -415,6 +415,7 @@ function CompactTools({ controls }: { controls: ToolControls }) {
   const retryHint = RETRY_MODE_LABELS[controls.retryPolicy?.mode ?? 'failover']
   const throttleState = readThrottleState(controls.throttleConfig)
   const throttleHint = throttleState.failover ? `开 · ${throttleState.cooldownMin}m` : '关'
+  const loadHint = `${LB_LABEL[controls.loadBalancingMode ?? 'priority']}${controls.adaptiveRpmEnabled ? ' · 自适应' : ''}`
 
   return (
     <DropdownMenu modal={false}>
@@ -425,33 +426,6 @@ function CompactTools({ controls }: { controls: ToolControls }) {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-64">
         <DropdownMenuLabel>系统操作</DropdownMenuLabel>
-        <DropdownMenuItem
-          disabled={controls.isLoadingMode || controls.isSettingMode}
-          onSelect={controls.handleToggleLoadBalancing}
-        >
-          <Activity />
-          {controls.isLoadingMode
-            ? '负载均衡加载中'
-            : `切换到${LB_LABEL[nextLbMode(controls.loadBalancingMode ?? 'priority')]}`}
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          disabled={controls.isLoadingMode || controls.isSettingMode}
-          onSelect={controls.handleToggleAffinity}
-        >
-          <Link />
-          {controls.affinityEnabled ? '关闭客户端亲和性' : '开启客户端亲和性'}
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          disabled={controls.isLoadingAdaptiveRpm || controls.isSettingAdaptiveRpm}
-          onSelect={controls.handleToggleAdaptiveRpm}
-        >
-          <Gauge />
-          {controls.isLoadingAdaptiveRpm
-            ? '自适应 RPM 加载中'
-            : controls.adaptiveRpmEnabled
-              ? '关闭自适应 RPM'
-              : '开启自适应 RPM'}
-        </DropdownMenuItem>
         <DropdownMenuItem onSelect={controls.handleRefresh}>
           <RefreshCw />刷新数据
         </DropdownMenuItem>
@@ -459,6 +433,35 @@ function CompactTools({ controls }: { controls: ToolControls }) {
           <UploadCloud />镜像在线更新
         </DropdownMenuItem>
         <DropdownMenuSeparator />
+        <CompactCollapsible label="负载调度" hint={loadHint}>
+          <DropdownMenuItem
+            disabled={controls.isLoadingMode || controls.isSettingMode}
+            onSelect={(e) => { e.preventDefault(); controls.handleToggleLoadBalancing() }}
+          >
+            <Activity />
+            {controls.isLoadingMode
+              ? '负载均衡加载中'
+              : `切换到${LB_LABEL[nextLbMode(controls.loadBalancingMode ?? 'priority')]}`}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={controls.isLoadingMode || controls.isSettingMode}
+            onSelect={(e) => { e.preventDefault(); controls.handleToggleAffinity() }}
+          >
+            <Link />
+            {controls.affinityEnabled ? '关闭客户端亲和性' : '开启客户端亲和性'}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={controls.isLoadingAdaptiveRpm || controls.isSettingAdaptiveRpm}
+            onSelect={(e) => { e.preventDefault(); controls.handleToggleAdaptiveRpm() }}
+          >
+            <Gauge />
+            {controls.isLoadingAdaptiveRpm
+              ? '自适应 RPM 加载中'
+              : controls.adaptiveRpmEnabled
+                ? '关闭自适应 RPM'
+                : '开启自适应 RPM'}
+          </DropdownMenuItem>
+        </CompactCollapsible>
         <CompactCollapsible label="普通 429 策略" hint={retryHint}>
           <RetryCompactItems controls={controls} hideLabel />
         </CompactCollapsible>

@@ -73,7 +73,9 @@ function presetStartDate(range: StatsRange, endDate: string): string {
 }
 
 function formatDateText(value: string): string {
-  return value.replace(/-/g, '/')
+  // 去掉年份，只显示 MM/DD（年份多余占地方）
+  const parts = value.split('-')
+  return parts.length === 3 ? `${parts[1]}/${parts[2]}` : value.replace(/-/g, '/')
 }
 
 function timeLabel(filter: StatsTimeFilter): string {
