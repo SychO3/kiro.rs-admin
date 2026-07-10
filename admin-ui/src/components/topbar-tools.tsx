@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import {
   Activity, Link, RefreshCw, UploadCloud, Settings, Key, Wand2, Eye, EyeOff, Copy,
   MoreHorizontal, ShieldAlert, ShieldCheck, Gauge, Shuffle, MessageSquarePlus,
-  SlidersHorizontal,
+  SlidersHorizontal, ChevronDown, ChevronRight,
 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -375,6 +375,35 @@ function SchedulingMenu({ controls }: { controls: ToolControls }) {
   )
 }
 
+/**
+ * 可折叠分段（移动端菜单专用）：默认收起，点标题行展开。
+ * 头行显示当前值 hint，避免收起时看不到状态。
+ */
+function CompactCollapsible({
+  label, hint, children,
+}: {
+  label: string
+  hint?: string
+  children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <DropdownMenuItem
+        className="justify-between"
+        onSelect={(e) => { e.preventDefault(); setOpen((v) => !v) }}
+      >
+        <span className="flex items-center gap-2">
+          {open ? <ChevronDown /> : <ChevronRight />}
+          {label}
+        </span>
+        {hint && <span className="text-[11px] text-muted-foreground">{hint}</span>}
+      </DropdownMenuItem>
+      {open && children}
+    </>
+  )
+}
+
 function CompactTools({ controls }: { controls: ToolControls }) {
   const throttleProps = {
     config: controls.throttleConfig,
@@ -383,6 +412,9 @@ function CompactTools({ controls }: { controls: ToolControls }) {
     onToggleFailover: controls.handleToggleFailover,
     onChangeCooldown: controls.updateCooldown,
   }
+  const retryHint = RETRY_MODE_LABELS[controls.retryPolicy?.mode ?? 'failover']
+  const throttleState = readThrottleState(controls.throttleConfig)
+  const throttleHint = throttleState.failover ? `开 · ${throttleState.cooldownMin}m` : '关'
 
   return (
     <DropdownMenu modal={false}>
@@ -426,8 +458,14 @@ function CompactTools({ controls }: { controls: ToolControls }) {
         <DropdownMenuItem onSelect={controls.openImageUpdate}>
           <UploadCloud />镜像在线更新
         </DropdownMenuItem>
-        <RetryCompactItems controls={controls} />
-        <ThrottleCompactItems {...throttleProps} />
+        <DropdownMenuSeparator />
+        <CompactCollapsible label="普通 429 策略" hint={retryHint}>
+          <RetryCompactItems controls={controls} hideLabel />
+        </CompactCollapsible>
+        <CompactCollapsible label="故障转移 / 冷却" hint={throttleHint}>
+          <ThrottleCompactItems {...throttleProps} hideLabel />
+        </CompactCollapsible>
+        <DropdownMenuSeparator />
         <DropdownMenuLabel>模型</DropdownMenuLabel>
         <DropdownMenuItem onSelect={controls.openModelMappings}>
           <Shuffle />模型映射（请求时模型名转发）
@@ -584,7 +622,7 @@ function RetrySwitch({
   )
 }
 
-function RetryCompactItems({ controls }: { controls: ToolControls }) {
+function RetryCompactItems({ controls, hideLabel }: { controls: ToolControls; hideLabel?: boolean }) {
   const [customPolicy, setCustomPolicy] = useState<RetryPolicy>(DEFAULT_CUSTOM_RETRY_POLICY)
   const activeMode = controls.retryPolicy?.mode ?? 'failover'
   const effective = controls.retryPolicy?.effectivePolicy
@@ -609,7 +647,7 @@ function RetryCompactItems({ controls }: { controls: ToolControls }) {
 
   return (
     <>
-      <DropdownMenuLabel>普通 429 策略</DropdownMenuLabel>
+      {!hideLabel && <DropdownMenuLabel>普通 429 策略</DropdownMenuLabel>}
       <div className="space-y-2 px-2 pb-2">
         <div className="grid grid-cols-2 gap-1 sm:grid-cols-3">
           {RETRY_MODES.map((mode) => (
@@ -828,8 +866,8 @@ function CustomCooldownForm({
   )
 }
 
-function ThrottleCompactItems(props: ThrottleConfigButtonProps) {
-  const { loading, saving, onToggleFailover, onChangeCooldown } = props
+function ThrottleCompactItems(props: ThrottleConfigButtonProps & { hideLabel?: boolean }) {
+  const { loading, saving, onToggleFailover, onChangeCooldown, hideLabel } = props
   const [customMin, setCustomMin] = useState('')
   const state = readThrottleState(props.config)
   const busy = loading || saving
@@ -847,7 +885,7 @@ function ThrottleCompactItems(props: ThrottleConfigButtonProps) {
 
   return (
     <>
-      <DropdownMenuLabel>故障转移</DropdownMenuLabel>
+      {!hideLabel && <DropdownMenuLabel>故障转移</DropdownMenuLabel>}
       <DropdownMenuItem
         disabled={busy}
         onSelect={onToggleFailover}
