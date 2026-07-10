@@ -1527,7 +1527,11 @@ impl MultiTokenManager {
         if let Some(key_id) = client_key_id {
             if self.affinity_enabled.load(Ordering::Relaxed) {
                 if let Some(bound_id) = self.client_affinity.get(key_id) {
-                    if !excluded_ids.contains(&bound_id) {
+                    // 绑定号必须未被排除、且当前健康（未冷却/风控/RPM超限/模型分组匹配）才复用；
+                    // 否则让开，走正常选择器挑健康号并重新绑定，避免流量死压单个被限流的号。
+                    if !excluded_ids.contains(&bound_id)
+                        && self.is_affinity_credential_reusable(bound_id, model, group)
+                    {
                         if let Ok(ctx) = self.acquire_context_for_id(bound_id).await {
                             self.client_affinity.touch(key_id);
                             return Ok(ctx);
@@ -1705,6 +1709,45 @@ impl MultiTokenManager {
         let ctx = self.try_ensure_token(id, &credentials).await?;
         self.inc_in_flight(ctx.id);
         Ok(ctx)
+    }
+
+    /// 判断亲和性绑定的凭据当前是否「健康可复用」。
+    ///
+    /// 亲和性快路径 `acquire_context_for_id` 只查 `disabled`，会在绑定凭据被 429 冷却 /
+    /// 账号级风控 / RPM 超限时仍强制复用它，导致全部流量砸向单个号、持续 429，
+    /// 健康的其它号反而闲置。这里对齐 `select_next_credential_excluding` 的过滤条件，
+    /// 绑定号一旦不健康就让开，fallthrough 到正常选择器（会选健康号并重新绑定）。
+    fn is_affinity_credential_reusable(
+        &self,
+        id: u64,
+        model: Option<&str>,
+        group: Option<&str>,
+    ) -> bool {
+        let entries = self.entries.lock();
+        let now = Instant::now();
+        let Some(e) = entries.iter().find(|e| e.id == id) else {
+            return false;
+        };
+        if e.disabled {
+            return false;
+        }
+        // 账号级 429 风控冷却中
+        if e.throttled_until.map(|t| t > now).unwrap_or(false) {
+            return false;
+        }
+        // 普通 429 策略冷却中
+        if e.rate_limited_until.map(|t| t > now).unwrap_or(false) {
+            return false;
+        }
+        // 模型/分组隔离
+        if !credential_matches_request(&e.credentials, model, group) {
+            return false;
+        }
+        // RPM 滑动窗口超限
+        if is_rpm_exceeded(e, now) {
+            return false;
+        }
+        true
     }
 
     /// 选择优先级最高的未禁用凭据作为当前凭据（内部方法）
@@ -4107,6 +4150,42 @@ mod tests {
             "期望错误消息包含 'API Key 凭据不支持刷新'，实际: {}",
             err_msg
         );
+    }
+
+    #[tokio::test]
+    async fn test_affinity_credential_reusable_yields_on_throttle() {
+        // 亲和性绑定号被账号级风控冷却时，应判定为不可复用（让开给健康号），
+        // 修复「流量死压单个被限流的号、持续 429」的根因。
+        let config = Config::default();
+        let mut cred1 = KiroCredentials::default();
+        cred1.refresh_token = Some("c".repeat(150));
+        let mut cred2 = KiroCredentials::default();
+        cred2.refresh_token = Some("d".repeat(150));
+        let manager =
+            MultiTokenManager::new(config, vec![cred1, cred2], None, None, false).unwrap();
+
+        let snap = manager.snapshot();
+        let id1 = snap.entries[0].id;
+        let id2 = snap.entries[1].id;
+
+        // 初始：两个号都健康可复用
+        assert!(manager.is_affinity_credential_reusable(id1, None, None));
+        assert!(manager.is_affinity_credential_reusable(id2, None, None));
+
+        // 号 1 触发账号级风控冷却 60s → 不可复用；号 2 仍可复用
+        manager.report_account_throttled(id1, StdDuration::from_secs(60));
+        assert!(
+            !manager.is_affinity_credential_reusable(id1, None, None),
+            "被风控冷却的绑定号应让开"
+        );
+        assert!(
+            manager.is_affinity_credential_reusable(id2, None, None),
+            "健康号应仍可复用"
+        );
+
+        // 普通 429 冷却同理
+        manager.report_rate_limited(id2, StdDuration::from_secs(60));
+        assert!(!manager.is_affinity_credential_reusable(id2, None, None));
     }
 
     #[tokio::test]
