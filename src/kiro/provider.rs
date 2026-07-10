@@ -42,6 +42,12 @@ const MAX_TOTAL_RETRIES: usize = 4;
 /// 预设在多账号池里无限放大。
 const MAX_POLICY_TOTAL_RETRIES: usize = 30;
 
+/// haiku 请求撑爆自身 200k 窗口（CONTENT_LENGTH_EXCEEDS_THRESHOLD）时，透明改路由到的
+/// 大窗口模型。典型触发场景：Claude Code `/goal` 模式的 Stop hook evaluator 固定用 haiku
+/// 评估，长对话超 200k 就每回合失败、goal 循环卡死（上游 CC 已知 bug）。sonnet-4.6 为 1M
+/// 窗口、成本远低于 opus，且不吃 opus 的 INVALID_MODEL_ID 代理问题。点号格式与请求体一致。
+const CONTEXT_OVERFLOW_REROUTE_MODEL: &str = "claude-sonnet-4.6";
+
 /// HTTP Client 缓存容量上限（不含常驻的全局代理 client）。
 /// 代理池条目较多时，避免每个不同代理都常驻一个 reqwest::Client 导致内存无界增长。
 const CLIENT_CACHE_CAP: usize = 64;
@@ -978,7 +984,13 @@ impl KiroProvider {
         let api_type = if is_stream { "流式" } else { "非流式" };
 
         // 尝试从请求体中提取模型信息
-        let model = Self::extract_model_from_request(request_body);
+        let mut model = Self::extract_model_from_request(request_body);
+
+        // 请求体可能在重试中被就地改写（haiku 上下文溢出 → 透明重路由到大窗口模型）。
+        // 用 Cow 承载：默认借用原体零拷贝，仅重路由时切换为 Owned。
+        let mut current_body: std::borrow::Cow<str> = std::borrow::Cow::Borrowed(request_body);
+        // 每条请求最多重路由一次：若换了大窗口模型仍溢出，是真溢出，不再兜底。
+        let mut context_rerouted = false;
 
         for attempt in 0..max_retries {
             let attempt_start = Instant::now();
@@ -1063,7 +1075,7 @@ impl KiroProvider {
                     &ctx,
                     &machine_id,
                     config,
-                    request_body,
+                    current_body.as_ref(),
                 )
                 .await
             {
@@ -1181,7 +1193,7 @@ impl KiroProvider {
                 // INVALID_MODEL_ID：当前出口 IP 不支持该模型（如 opus），
                 // 仅 opus 系列触发代理 failover（其他模型可能上游本身不支持）。
                 if body.contains("INVALID_MODEL_ID") {
-                    let is_opus = request_body.contains("opus");
+                    let is_opus = current_body.contains("opus");
                     if is_opus {
                         tracing::warn!(
                             "凭据 #{} 当前代理返回 INVALID_MODEL_ID（opus），标记代理失败并重试",
@@ -1218,6 +1230,50 @@ impl KiroProvider {
                     );
                     return Err(anyhow::anyhow!("INVALID_MODEL_ID: 上游不支持该模型"));
                 }
+
+                // haiku 撑爆自身 200k 窗口：透明改路由到大窗口模型重试一次。
+                // 典型场景是 Claude Code /goal 的 Stop hook evaluator 固定用 haiku 评估，
+                // 长对话超 200k 就每回合 400、goal 循环卡死。仅在「当前模型是 haiku」且
+                // 「本请求尚未重路由过」时触发；换过一次仍溢出则视为真溢出，落到下方 bail。
+                let is_haiku = model
+                    .as_deref()
+                    .map(|m| m.to_ascii_lowercase().contains("haiku"))
+                    .unwrap_or(false);
+                if body.contains("CONTENT_LENGTH_EXCEEDS_THRESHOLD")
+                    && is_haiku
+                    && !context_rerouted
+                {
+                    if let Some(new_body) = Self::rewrite_model_in_body(
+                        current_body.as_ref(),
+                        CONTEXT_OVERFLOW_REROUTE_MODEL,
+                    ) {
+                        tracing::warn!(
+                            "凭据 #{} haiku 请求撑爆 200k（CONTENT_LENGTH_EXCEEDS_THRESHOLD），\
+                             透明重路由到 {} 重试（尝试 {}/{}）",
+                            ctx.id,
+                            CONTEXT_OVERFLOW_REROUTE_MODEL,
+                            attempt + 1,
+                            max_retries
+                        );
+                        Self::emit_attempt(
+                            sink,
+                            attempt,
+                            ctx.id,
+                            endpoint_name,
+                            Some(400),
+                            "context_reroute",
+                            Some(&body),
+                            attempt_start,
+                            Some(acquire_ms),
+                            Some(connect_ms),
+                        );
+                        current_body = std::borrow::Cow::Owned(new_body);
+                        model = Some(CONTEXT_OVERFLOW_REROUTE_MODEL.to_string());
+                        context_rerouted = true;
+                        continue;
+                    }
+                }
+
                 Self::emit_attempt(
                     sink,
                     attempt,
@@ -1376,7 +1432,7 @@ impl KiroProvider {
                             &ctx,
                             &machine_id,
                             config,
-                            request_body,
+                            current_body.as_ref(),
                             selected_proxy.clone(),
                         )
                         .await
@@ -1674,6 +1730,22 @@ impl KiroProvider {
             .map(|s| s.to_string())
     }
 
+    /// 把请求体里 conversationState.currentMessage.userInputMessage.modelId 改成 `new_model`，
+    /// 返回改写后的 JSON 字符串。仅用于 haiku 上下文溢出时的透明重路由（见
+    /// [`CONTEXT_OVERFLOW_REROUTE_MODEL`]）。解析失败或结构不符则返回 None（调用方保持原体）。
+    fn rewrite_model_in_body(request_body: &str, new_model: &str) -> Option<String> {
+        use serde_json::Value;
+
+        let mut json: Value = serde_json::from_str(request_body).ok()?;
+        let model_id = json
+            .get_mut("conversationState")?
+            .get_mut("currentMessage")?
+            .get_mut("userInputMessage")?
+            .get_mut("modelId")?;
+        *model_id = Value::String(new_model.to_string());
+        serde_json::to_string(&json).ok()
+    }
+
     fn effective_retry_policy(&self) -> anyhow::Result<(RetryMode, RetryPolicy)> {
         let (mode, _, effective) = self.token_manager.get_retry_policy()?;
         Ok((mode, effective))
@@ -1824,5 +1896,25 @@ mod tests {
             readable_response_snippet_from_bytes(b"{\"message\":\"bad request\"}").as_deref(),
             Some("{\"message\":\"bad request\"}")
         );
+    }
+
+    #[test]
+    fn rewrite_model_replaces_only_current_message_model_id() {
+        let body = r#"{"conversationState":{"currentMessage":{"userInputMessage":{"content":"hi","modelId":"claude-haiku-4.5"}}}}"#;
+        let out = KiroProvider::rewrite_model_in_body(body, "claude-sonnet-4.6").unwrap();
+        // 改写后当前请求模型应为大窗口模型，且能被 extract 读回。
+        assert_eq!(
+            KiroProvider::extract_model_from_request(&out).as_deref(),
+            Some("claude-sonnet-4.6")
+        );
+        assert!(!out.contains("claude-haiku-4.5"));
+        assert!(out.contains("\"content\":\"hi\""));
+    }
+
+    #[test]
+    fn rewrite_model_returns_none_on_unexpected_shape() {
+        // 结构不含 conversationState 路径时返回 None，调用方保持原体。
+        assert!(KiroProvider::rewrite_model_in_body(r#"{"foo":"bar"}"#, "x").is_none());
+        assert!(KiroProvider::rewrite_model_in_body("not json", "x").is_none());
     }
 }
